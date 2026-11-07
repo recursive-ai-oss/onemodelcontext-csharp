@@ -103,6 +103,34 @@ public sealed class OAuthClient : IDisposable
     }
   }
 
+  /// <summary>
+  /// Creates an <see cref="HttpClient"/> that carries this client's tokens and answers the resource's challenges (see
+  /// <see cref="OAuthHttpHandler"/>). Pass it to <c>ContextTransport.Http</c>: a decorating hook alone cannot answer a <c>401</c> or
+  /// <c>403</c> by authorizing and replaying the request, so the handler is the way to use this client with the HTTP transport. The
+  /// returned client has no overall timeout (event streams stay open) and never follows redirects. It owns its handler, not this object.
+  /// </summary>
+  public HttpClient CreateHttpClient() => new(new OAuthHttpHandler(this), disposeHandler: true) { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+
+  /// <summary>
+  /// Adds the stored (or refreshed) access token to a request, with no interaction and no replay. Use it as a transport's request hook only
+  /// when the token is obtained some other way; it does nothing for a request to another origin than <see cref="OAuthClientOptions.Resource"/>.
+  /// </summary>
+  /// <param name="request">The request to add the <c>Authorization</c> header to.</param>
+  /// <param name="cancellationToken">Cancels the wait.</param>
+  public async ValueTask AuthorizeRequestAsync(HttpRequestMessage request, CancellationToken cancellationToken = default)
+  {
+    ArgumentNullException.ThrowIfNull(request);
+    if (request.RequestUri is null || !OAuthUri.SameOrigin(request.RequestUri, _options.Resource))
+    {
+      return;
+    }
+
+    if (await GetAccessTokenAsync(cancellationToken).ConfigureAwait(false) is { } token)
+    {
+      request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+    }
+  }
+
   /// <summary>Forgets the stored tokens for this resource (the client registration is kept).</summary>
   /// <param name="cancellationToken">Cancels the write.</param>
   public async ValueTask SignOutAsync(CancellationToken cancellationToken = default)

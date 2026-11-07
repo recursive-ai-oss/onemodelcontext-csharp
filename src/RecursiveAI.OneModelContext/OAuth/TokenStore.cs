@@ -72,7 +72,7 @@ public sealed class TokenRecord
   {
     DateTimeOffset? expires = null;
     if (element.TryGetProperty("expires_at", out var at) && at.ValueKind == JsonValueKind.String
-      && DateTimeOffset.TryParse(at.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
+      && DateTimeOffset.TryParse(MetadataJson.Text(at), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
     {
       expires = parsed;
     }

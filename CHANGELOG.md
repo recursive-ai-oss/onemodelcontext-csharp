@@ -19,3 +19,7 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
 - `server.Tool(...)`, `server.Resource(...)` and `server.Prompt(...)`: a reflection quick path that writes the same schemas and is annotated
   as not trim- or AOT-safe.
 - `ModelContext.ServeAsync` and `ModelContext.ConnectAsync` for the happy path, and a NativeAOT stdio server sample.
+- The Streamable HTTP client (`ContextTransport.Http`, `ModelContext.ConnectAsync(Uri)`), speaking both eras with sessions, the GET stream
+  and `Last-Event-ID` resumption, a client-only fallback to the deprecated HTTP+SSE transport, an SSE reader with bounded events, a hook
+  for adding credentials to every request, and `subscriptions/listen` on the client. See `docs/http-client.md`.
+- `ModelContext.ConnectAsync("https://...")` connects a URL over Streamable HTTP, with the same callbacks as a command line.

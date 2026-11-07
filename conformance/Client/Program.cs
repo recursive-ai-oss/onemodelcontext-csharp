@@ -1,107 +1,276 @@
-using System.Net;
-using System.Net.Http.Headers;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using RecursiveAI.OneModelContext;
 using RecursiveAI.OneModelContext.OAuth;
+using RecursiveAI.OneModelContext.Protocol;
+using RecursiveAI.OneModelContext.Wire;
 
-// Runs one authorization scenario of the conformance suite. The suite appends the server URL as the argument and names the scenario and
-// protocol version in the environment (MCP_CONFORMANCE_SCENARIO, MCP_CONFORMANCE_PROTOCOL_VERSION); some scenarios hand over credentials in
-// MCP_CONFORMANCE_CONTEXT, a JSON object.
-var url = new Uri(args[^1]);
-var scenario = Environment.GetEnvironmentVariable("MCP_CONFORMANCE_SCENARIO") ?? string.Empty;
+// conformance-client URL
+//
+// The suite starts this program with its test server's URL as the last argument and names the scenario in MCP_CONFORMANCE_SCENARIO.
+// MCP_CONFORMANCE_PROTOCOL_VERSION, when set, is the one revision the client may speak. Whatever the scenario, the client connects, lists
+// what the server offers and uses all of it with arguments built from the schemas, which is what each scenario observes on the wire.
+var url = args.LastOrDefault();
+if (url is null || !Uri.TryCreate(url, UriKind.Absolute, out var endpoint))
+{
+  Console.Error.WriteLine("usage: conformance-client URL");
+  return 2;
+}
+
+var scenario = Environment.GetEnvironmentVariable("MCP_CONFORMANCE_SCENARIO") ?? "";
 var version = Environment.GetEnvironmentVariable("MCP_CONFORMANCE_PROTOCOL_VERSION");
-var context = Environment.GetEnvironmentVariable("MCP_CONFORMANCE_CONTEXT") is { Length: > 0 } text ? JsonNode.Parse(text)?.AsObject() : null;
-var modern = version == "2026-07-28";
-// The "browser" of a headless run: it requests the authorization URL and reads the redirect from the answer, without following it.
-using var browserHttp = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false });
-var agent = new HeadlessUserAgent(new Uri("http://localhost:3000/callback"), browserHttp);
+Console.Error.WriteLine($"scenario '{scenario}' against {endpoint.GetLeftPart(UriPartial.Authority)}{endpoint.AbsolutePath}");
 
-var options = BuildOptions(url, scenario, context, agent);
-using var oauth = new OAuthClient(options);
-using var http = new HttpClient(new OAuthHttpHandler(oauth));
-var client = new RpcClient(http, url, modern, version);
+var options = new ContextClientOptions
+{
+  Capabilities = new ClientCapabilities { Elicitation = new ElicitationCapability() },
+  RequestHandler = new Answers(),
+  EraCache = null,
+  SupportedVersions = string.IsNullOrEmpty(version) ? ProtocolVersions.Supported : [version],
+};
+
+// The authorization scenarios run the OAuth client under the HTTP transport; the others connect plainly.
+using var browser = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false });
+OAuthClient? oauth = null;
+HttpClient? authenticated = null;
+if (scenario.StartsWith("auth/", StringComparison.Ordinal))
+{
+  oauth = new OAuthClient(AuthScenarios.Options(endpoint, scenario, new HeadlessUserAgent(new Uri("http://localhost:3000/callback"), browser)));
+  authenticated = oauth.CreateHttpClient();
+}
+
+using var oauthLifetime = oauth;
+using var authenticatedLifetime = authenticated;
+ContextClient client;
 try
 {
-  if (!modern)
-  {
-    await client.CallAsync("initialize", new JsonObject
-    {
-      ["protocolVersion"] = version ?? "2025-11-25",
-      ["capabilities"] = new JsonObject(),
-      ["clientInfo"] = new JsonObject { ["name"] = "onemodelcontext-conformance", ["version"] = "0" },
-    });
-    await client.NotifyAsync("notifications/initialized");
-  }
-
-  var tools = await client.CallAsync("tools/list", new JsonObject());
-  var first = tools?["tools"]?.AsArray().FirstOrDefault()?["name"]?.GetValue<string>();
-  if (first is not null)
-  {
-    await client.CallAsync("tools/call", new JsonObject { ["name"] = first, ["arguments"] = new JsonObject() });
-  }
-
-  return 0;
+  client = await ContextClient.ConnectAsync(ContextTransport.Http(endpoint, authenticated), options);
 }
-catch (Exception ex) when (ex is OAuthException or HttpRequestException or InvalidOperationException)
+catch (ContextException ex)
 {
-  // The suite reads the checks from its own server; the text is for people.
-  Console.Error.WriteLine(ex.GetType().Name + ": " + ex.Message);
+  Console.Error.WriteLine($"connect: {ex.GetType().Name}: {ex.Message}");
   return 1;
 }
 
-static OAuthClientOptions BuildOptions(Uri url, string scenario, JsonObject? context, IAuthorizationUserAgent agent)
+await using var closing = client;
+Console.Error.WriteLine($"negotiated {client.ProtocolVersion} ({client.Era})");
+
+// Not a suite scenario: against this repository's conformance server, opens a subscription, makes the server change its lists and
+// waits for the notifications (a check of change notifications over a real socket).
+if (scenario == "listen")
 {
-  string? Ctx(string name) => context?[name]?.GetValue<string>();
-  var clientId = Ctx("client_id");
-  var secret = Ctx("client_secret");
-  if (scenario == "auth/client-credentials-basic")
+  await using var subscription = await client.ListenAsync(new SubscriptionFilter { ToolsListChanged = true, PromptsListChanged = true });
+  Console.Error.WriteLine($"acknowledged tools={subscription.Acknowledged.ToolsListChanged} prompts={subscription.Acknowledged.PromptsListChanged}");
+  using var window = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+  var seen = new List<SubscriptionEventKind>();
+  var reader = Task.Run(async () =>
   {
-    return new OAuthClientOptions(url) { ClientCredentials = new ClientCredentialsGrant(clientId!, secret!) };
-  }
-
-  if (scenario == "auth/client-credentials-jwt")
-  {
-    var pem = Ctx("private_key_pem")!;
-    AsymmetricAlgorithm key = ECDsa.Create();
-    try
+    await foreach (var item in subscription.ReadAllAsync(window.Token))
     {
-      key.ImportFromPem(pem);
-    }
-    catch (CryptographicException)
-    {
-      key = RSA.Create();
-      key.ImportFromPem(pem);
-    }
-
-    return new OAuthClientOptions(url) { ClientCredentials = new ClientCredentialsGrant(clientId!, key, Ctx("kid")) };
-  }
-
-  if (scenario == "auth/enterprise-managed-authorization")
-  {
-    var idToken = Ctx("idp_id_token")!;
-    return new OAuthClientOptions(url)
-    {
-      Enterprise = new EnterpriseManagedAuthorization(new Uri(Ctx("idp_token_endpoint")!), _ => ValueTask.FromResult(idToken), clientId!)
+      seen.Add(item.Kind);
+      Console.Error.WriteLine($"event {item.Kind}");
+      if (seen.Count == 2)
       {
-        ClientSecret = secret,
-        IdentityProviderClientId = Ctx("idp_client_id"),
-      },
-    };
+        return;
+      }
+    }
+  });
+  await client.CallToolAsync("test_trigger_tool_change");
+  await client.CallToolAsync("test_trigger_prompt_change");
+  try
+  {
+    await reader;
+  }
+  catch (OperationCanceledException)
+  {
+    Console.Error.WriteLine("timed out");
+    return 1;
   }
 
-  var preRegistered = scenario is "auth/pre-registration" or "auth/token-endpoint-auth-basic" or "auth/token-endpoint-auth-post" && clientId is not null
-    ? new PreRegisteredClient(clientId, secret)
-    : null;
-  return new OAuthClientOptions(url)
-  {
-    UserAgent = agent,
-    PreRegistered = preRegistered,
-    ClientIdMetadataUrl = Ctx("client_id_metadata_url") ?? "https://conformance-test.local/client-metadata.json",
-  };
+  return seen.Contains(SubscriptionEventKind.ToolsListChanged) && seen.Contains(SubscriptionEventKind.PromptsListChanged) ? 0 : 1;
 }
 
+var failures = 0;
+async Task Try(string what, Func<Task> work)
+{
+  try
+  {
+    await work();
+  }
+  catch (Exception ex) when (ex is ContextException or OperationCanceledException or TimeoutException)
+  {
+    failures++;
+    Console.Error.WriteLine($"{what}: {ex.GetType().Name}: {ex.Message}");
+  }
+}
+
+IReadOnlyList<Tool> tools = [];
+await Try("tools/list", async () => tools = await client.ListToolsAsync());
+
+// Some scenarios say which calls to make (MCP_CONFORMANCE_CONTEXT, a JSON object with toolCalls); otherwise every tool is called.
+var planned = new List<(string Name, JsonElement Arguments)>();
+if (Environment.GetEnvironmentVariable("MCP_CONFORMANCE_CONTEXT") is { Length: > 0 } context)
+{
+  using var document = JsonDocument.Parse(context);
+  if (document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("toolCalls", out var calls) && calls.ValueKind == JsonValueKind.Array)
+  {
+    foreach (var call in calls.EnumerateArray())
+    {
+      planned.Add((call.GetProperty("name").GetString()!, call.TryGetProperty("arguments", out var a) ? a.Clone() : default));
+    }
+  }
+}
+
+if (planned.Count == 0)
+{
+  foreach (var tool in tools)
+  {
+    planned.Add((tool.Name, Sample.Arguments(tool, tools)));
+  }
+}
+
+foreach (var (name, arguments) in planned)
+{
+  await Try($"tools/call {name}", async () =>
+  {
+    var result = await client.CallToolAsync(name, arguments);
+    Console.Error.WriteLine($"called {name}: {result.Content.Count} block(s){(result.IsError == true ? ", isError" : "")}");
+  });
+}
+
+IReadOnlyList<Resource> resources = [];
+if (client.ServerCapabilities.Resources is not null)
+{
+  await Try("resources/list", async () => resources = await client.ListResourcesAsync());
+  foreach (var resource in resources)
+  {
+    await Try($"resources/read {resource.Uri}", async () => await client.ReadResourceAsync(resource.Uri));
+  }
+}
+
+if (client.ServerCapabilities.Prompts is not null)
+{
+  IReadOnlyList<Prompt> prompts = [];
+  await Try("prompts/list", async () => prompts = await client.ListPromptsAsync());
+  foreach (var prompt in prompts)
+  {
+    var arguments = (prompt.Arguments ?? []).ToDictionary(a => a.Name, _ => "test");
+    await Try($"prompts/get {prompt.Name}", async () => await client.GetPromptAsync(prompt.Name, arguments));
+  }
+}
+
+Console.Error.WriteLine(failures == 0 ? "done" : $"done with {failures} failed call(s)");
+return 0;
+
+/// <summary>Answers what a server asks of a client: it accepts an elicitation with the schema's defaults, so a form is always filled.</summary>
+internal sealed class Answers : IClientRequestHandler
+{
+  public ValueTask<Result> HandleAsync(string method, JsonElement parameters, CancellationToken cancellationToken)
+  {
+    if (method != Methods.ElicitationCreate)
+    {
+      throw new ProtocolException(-32601, "Method not found: " + method + ".");
+    }
+
+    var content = new Dictionary<string, JsonElement>();
+    if (parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("requestedSchema", out var schema))
+    {
+      foreach (var (name, value) in Sample.Properties(schema))
+      {
+        content[name] = value;
+      }
+    }
+
+    return ValueTask.FromResult<Result>(new ElicitResult { Action = "accept", Content = content });
+  }
+}
+
+/// <summary>Values for a JSON Schema: the declared default, constant or first enum member, otherwise something of the right type.</summary>
+internal static class Sample
+{
+  internal static JsonElement Arguments(Tool tool, IReadOnlyList<Tool> all)
+  {
+    var arguments = new JsonObject();
+    foreach (var (name, value) in Properties(tool.InputSchema))
+    {
+      arguments[name] = JsonNode.Parse(value.GetRawText());
+    }
+
+    // The schema scenario asks a client to hand the schema it received for another tool back through an echo tool.
+    if (tool.InputSchema.TryGetProperty("properties", out var properties) && properties.TryGetProperty("schema", out var schema)
+      && schema.TryGetProperty("type", out var type) && type.GetString() == "object"
+      && all.FirstOrDefault(t => t != tool && t.Name.StartsWith("json_schema", StringComparison.Ordinal)) is { } subject)
+    {
+      arguments["schema"] = JsonNode.Parse(subject.InputSchema.GetRawText());
+    }
+
+    return JsonSerializer.SerializeToElement(arguments);
+  }
+
+  private static JsonElement Nested(JsonElement schema)
+  {
+    var arguments = new JsonObject();
+    foreach (var (name, value) in Properties(schema))
+    {
+      arguments[name] = JsonNode.Parse(value.GetRawText());
+    }
+
+    return JsonSerializer.SerializeToElement(arguments);
+  }
+
+  internal static IEnumerable<KeyValuePair<string, JsonElement>> Properties(JsonElement schema)
+  {
+    if (schema.ValueKind != JsonValueKind.Object || !schema.TryGetProperty("properties", out var properties) || properties.ValueKind != JsonValueKind.Object)
+    {
+      yield break;
+    }
+
+    foreach (var property in properties.EnumerateObject())
+    {
+      yield return new(property.Name, ValueFor(property.Value, 0));
+    }
+  }
+
+  private static JsonElement ValueFor(JsonElement schema, int depth)
+  {
+    if (schema.ValueKind == JsonValueKind.Object)
+    {
+      if (schema.TryGetProperty("default", out var fallback))
+      {
+        return fallback.Clone();
+      }
+
+      if (schema.TryGetProperty("const", out var constant))
+      {
+        return constant.Clone();
+      }
+
+      if (schema.TryGetProperty("enum", out var members) && members.ValueKind == JsonValueKind.Array && members.GetArrayLength() > 0)
+      {
+        return members[0].Clone();
+      }
+
+      var type = schema.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
+      switch (type)
+      {
+        case "integer":
+        case "number":
+          return JsonSerializer.SerializeToElement(1);
+        case "boolean":
+          return JsonSerializer.SerializeToElement(true);
+        case "array":
+          return JsonSerializer.SerializeToElement(Array.Empty<int>());
+        case "object" when depth < 4:
+          return Nested(schema);
+      }
+    }
+
+    return JsonSerializer.SerializeToElement("test");
+  }
+}
+
+/// <summary>The browser of a headless run: requests the authorization URL and reads the redirect from the answer, without following it.</summary>
 internal sealed class HeadlessUserAgent(Uri redirect, HttpClient http) : IAuthorizationUserAgent
 {
   public Uri RedirectUri => redirect;
@@ -115,70 +284,50 @@ internal sealed class HeadlessUserAgent(Uri redirect, HttpClient http) : IAuthor
   }
 }
 
-internal sealed class RpcClient(HttpClient http, Uri url, bool modern, string? version)
+/// <summary>What each authorization scenario hands the client (in MCP_CONFORMANCE_CONTEXT) and how the client is set up for it.</summary>
+internal static class AuthScenarios
 {
-  private int _id;
-  private string? _session;
-
-  public async Task<JsonNode?> CallAsync(string method, JsonObject parameters)
+  public static OAuthClientOptions Options(Uri url, string scenario, IAuthorizationUserAgent agent)
   {
-    if (modern)
+    var context = Environment.GetEnvironmentVariable("MCP_CONFORMANCE_CONTEXT") is { Length: > 0 } text ? JsonDocument.Parse(text).RootElement : default;
+    string? Ctx(string name) => context.ValueKind == JsonValueKind.Object && context.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+    var clientId = Ctx("client_id");
+    var secret = Ctx("client_secret");
+    switch (scenario)
     {
-      parameters["_meta"] = new JsonObject
-      {
-        ["io.modelcontextprotocol/protocolVersion"] = version,
-        ["io.modelcontextprotocol/clientCapabilities"] = new JsonObject(),
-        ["io.modelcontextprotocol/clientInfo"] = new JsonObject { ["name"] = "onemodelcontext-conformance", ["version"] = "0" },
-      };
+      case "auth/client-credentials-basic":
+        return new OAuthClientOptions(url) { ClientCredentials = new ClientCredentialsGrant(clientId!, secret!) };
+      case "auth/client-credentials-jwt":
+        var pem = Ctx("private_key_pem")!;
+        AsymmetricAlgorithm key = ECDsa.Create();
+        try
+        {
+          key.ImportFromPem(pem);
+        }
+        catch (CryptographicException)
+        {
+          key = RSA.Create();
+          key.ImportFromPem(pem);
+        }
+
+        return new OAuthClientOptions(url) { ClientCredentials = new ClientCredentialsGrant(clientId!, key, Ctx("kid")) };
+      case "auth/enterprise-managed-authorization":
+        var idToken = Ctx("idp_id_token")!;
+        return new OAuthClientOptions(url)
+        {
+          Enterprise = new EnterpriseManagedAuthorization(new Uri(Ctx("idp_token_endpoint")!), _ => ValueTask.FromResult(idToken), clientId!)
+          {
+            ClientSecret = secret,
+            IdentityProviderClientId = Ctx("idp_client_id"),
+          },
+        };
+      default:
+        return new OAuthClientOptions(url)
+        {
+          UserAgent = agent,
+          PreRegistered = scenario is "auth/pre-registration" or "auth/token-endpoint-auth-basic" or "auth/token-endpoint-auth-post" && clientId is not null ? new PreRegisteredClient(clientId, secret) : null,
+          ClientIdMetadataUrl = Ctx("client_id_metadata_url") ?? "https://conformance-test.local/client-metadata.json",
+        };
     }
-
-    var body = new JsonObject { ["jsonrpc"] = "2.0", ["id"] = ++_id, ["method"] = method, ["params"] = parameters };
-    using var response = await SendAsync(method, parameters["name"]?.GetValue<string>(), body);
-    if (!response.IsSuccessStatusCode)
-    {
-      throw new HttpRequestException("The server answered " + (int)response.StatusCode + " to " + method + ".");
-    }
-
-    if (response.Headers.TryGetValues("Mcp-Session-Id", out var sessions))
-    {
-      _session = sessions.First();
-    }
-
-    var text = await response.Content.ReadAsStringAsync();
-    if (response.Content.Headers.ContentType?.MediaType == "text/event-stream")
-    {
-      text = text.Split('\n').Where(l => l.StartsWith("data:", StringComparison.Ordinal)).Select(l => l[5..].Trim()).FirstOrDefault(l => l.Contains("\"result\"", StringComparison.Ordinal) || l.Contains("\"error\"", StringComparison.Ordinal)) ?? "{}";
-    }
-
-    var message = JsonNode.Parse(text);
-    return message?["result"];
-  }
-
-  public async Task NotifyAsync(string method)
-  {
-    using var response = await SendAsync(method, null, new JsonObject { ["jsonrpc"] = "2.0", ["method"] = method });
-  }
-
-  private Task<HttpResponseMessage> SendAsync(string method, string? name, JsonObject body)
-  {
-    var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json") };
-    request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-    request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
-    if (modern)
-    {
-      request.Headers.TryAddWithoutValidation("MCP-Protocol-Version", version);
-      request.Headers.TryAddWithoutValidation("Mcp-Method", method);
-      if (name is not null && method == "tools/call")
-      {
-        request.Headers.TryAddWithoutValidation("Mcp-Name", name);
-      }
-    }
-    else if (_session is not null)
-    {
-      request.Headers.TryAddWithoutValidation("Mcp-Session-Id", _session);
-      request.Headers.TryAddWithoutValidation("MCP-Protocol-Version", version ?? "2025-11-25");
-    }
-
-    return http.SendAsync(request);
   }
 }

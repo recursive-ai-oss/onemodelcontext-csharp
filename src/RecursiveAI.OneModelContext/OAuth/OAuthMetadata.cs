@@ -134,7 +134,20 @@ internal static class MetadataJson
   }
 
   internal static string? GetString(JsonElement root, string name) =>
-    root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+    root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? Text(value) : null;
+
+  // JsonElement.GetString throws on a string that is not valid UTF-8, which a hostile server can send; such a value counts as absent.
+  internal static string? Text(JsonElement value)
+  {
+    try
+    {
+      return value.GetString();
+    }
+    catch (InvalidOperationException)
+    {
+      return null;
+    }
+  }
 
   internal static bool GetBool(JsonElement root, string name) =>
     root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.True;
@@ -149,7 +162,7 @@ internal static class MetadataJson
     var list = new List<string>();
     foreach (var item in value.EnumerateArray())
     {
-      if (item.ValueKind == JsonValueKind.String && item.GetString() is { } text && list.Count < MaxItems)
+      if (item.ValueKind == JsonValueKind.String && Text(item) is { } text && list.Count < MaxItems)
       {
         list.Add(text);
       }

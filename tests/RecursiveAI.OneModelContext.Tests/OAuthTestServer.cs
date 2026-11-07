@@ -226,18 +226,15 @@ internal sealed class TestAuthServer : IAsyncDisposable
 
   private async ValueTask CodeGrantAsync(IHttpExchange exchange, Dictionary<string, string> form)
   {
-    (string Challenge, string Scope, string Resource, string RedirectUri) pending;
+    (string Challenge, string Scope, string Resource, string RedirectUri)? found;
     lock (_lock)
     {
-      if (!_codes.Remove(form.GetValueOrDefault("code", string.Empty), out pending))
-      {
-        pending = default;
-      }
+      found = _codes.Remove(form.GetValueOrDefault("code", string.Empty), out var entry) ? entry : null;
     }
 
     var verifier = form.GetValueOrDefault("code_verifier", string.Empty);
     var computed = TestIssuer.B64(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
-    if (pending.Challenge is null || computed != pending.Challenge || form.GetValueOrDefault("redirect_uri") != pending.RedirectUri || form.GetValueOrDefault("resource") != pending.Resource)
+    if (found is not { } pending || computed != pending.Challenge || form.GetValueOrDefault("redirect_uri") != pending.RedirectUri || form.GetValueOrDefault("resource") != pending.Resource)
     {
       await WriteJsonAsync(exchange, 400, """{"error":"invalid_grant"}""");
       return;

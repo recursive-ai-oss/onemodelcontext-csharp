@@ -137,6 +137,7 @@ public sealed partial class ContextClient : IAsyncDisposable
   private readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.Ordinal);
   private readonly ConcurrentDictionary<string, IProgress<ProgressNotificationParams>> _progress = new(StringComparer.Ordinal);
   private long _progressCounter;
+  private Transports.HttpChannel? _httpChannel;
 
   private ContextClient(JsonRpcConnection rpc, ClientSession session, ClientHello hello, ContextClientOptions options, IClientRequestHandler? handler, Task<JsonRpcCloseReason> run)
   {
@@ -210,14 +211,14 @@ public sealed partial class ContextClient : IAsyncDisposable
       using var timeout = new CancellationTokenSource(options.ConnectTimeout, options.TimeProvider);
       using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
       var session = await NegotiateAsync(rpc, hello, options, options.ServerKey ?? transport.ServerKey, linked.Token).ConfigureAwait(false);
-      var client = new ContextClient(rpc, session, hello, options, CallbackRequestHandler.For(options), run);
+      var client = new ContextClient(rpc, session, hello, options, CallbackRequestHandler.For(options), run) { _httpChannel = channel as Transports.HttpChannel };
       holder.Client = client;
       return client;
     }
     catch (Exception ex) when (ex is JsonRpcClosedException)
     {
       await rpc.DisposeAsync().ConfigureAwait(false);
-      throw new TransportException("The connection closed during negotiation.", ex);
+      throw (Exception?)AuthorizationFrom(ex) ?? new TransportException("The connection closed during negotiation.", ex);
     }
     catch
     {
@@ -251,8 +252,11 @@ public sealed partial class ContextClient : IAsyncDisposable
   /// <summary>Lists one page of tools.</summary>
   /// <param name="cursor">The previous page's <c>nextCursor</c>, or null for the first page.</param>
   /// <param name="cancellationToken">Cancels the call.</param>
-  public ValueTask<ListToolsResult> ListToolsPageAsync(string? cursor = null, CancellationToken cancellationToken = default) =>
-    CallAsync<ListToolsResult>(Methods.ToolsList, new PaginatedRequestParams { Cursor = cursor }, cancellationToken, cacheKey: Methods.ToolsList + "\0" + cursor);
+  public async ValueTask<ListToolsResult> ListToolsPageAsync(string? cursor = null, CancellationToken cancellationToken = default)
+  {
+    var page = await CallAsync<ListToolsResult>(Methods.ToolsList, new PaginatedRequestParams { Cursor = cursor }, cancellationToken, cacheKey: Methods.ToolsList + "\0" + cursor).ConfigureAwait(false);
+    return _httpChannel is not null && Era == ProtocolEra.Modern ? MirrorToolHeaders(page) : page;
+  }
 
   /// <summary>Lists every resource.</summary>
   /// <param name="cancellationToken">Cancels the call.</param>
@@ -334,7 +338,7 @@ public sealed partial class ContextClient : IAsyncDisposable
   public ValueTask<CallToolResult> CallToolAsync(string name, JsonElement arguments = default, CancellationToken cancellationToken = default)
   {
     ArgumentNullException.ThrowIfNull(name);
-    return CallAsync<CallToolResult>(Methods.ToolsCall, new CallToolRequestParams { Name = name, Arguments = arguments }, cancellationToken);
+    return CallToolCoreAsync(name, arguments, null, cancellationToken);
   }
 
   /// <summary>Calls a tool and reports the progress the server sends while it works.</summary>
@@ -346,7 +350,48 @@ public sealed partial class ContextClient : IAsyncDisposable
   public ValueTask<CallToolResult> CallToolAsync(string name, JsonElement arguments, IProgress<ProgressNotificationParams>? progress, CancellationToken cancellationToken = default)
   {
     ArgumentNullException.ThrowIfNull(name);
-    return CallAsync<CallToolResult>(Methods.ToolsCall, new CallToolRequestParams { Name = name, Arguments = arguments }, cancellationToken, progress);
+    return CallToolCoreAsync(name, arguments, progress, cancellationToken);
+  }
+
+  private async ValueTask<CallToolResult> CallToolCoreAsync(string name, JsonElement arguments, IProgress<ProgressNotificationParams>? progress, CancellationToken cancellationToken)
+  {
+    var request = new CallToolRequestParams { Name = name, Arguments = arguments };
+    try
+    {
+      return await CallAsync<CallToolResult>(Methods.ToolsCall, request, cancellationToken, progress).ConfigureAwait(false);
+    }
+    catch (HeaderMismatchException) when (_httpChannel is not null && Era == ProtocolEra.Modern)
+    {
+      // 2026-07-28 transports, "Client Behavior": a rejection for missing Mcp-Param headers means the tool's schema may have changed;
+      // list the tools again to learn the headers, then retry the call once.
+      InvalidateCache();
+      await ListToolsAsync(cancellationToken).ConfigureAwait(false);
+      return await CallAsync<CallToolResult>(Methods.ToolsCall, request, cancellationToken, progress).ConfigureAwait(false);
+    }
+  }
+
+  // 2026-07-28 transports, "Custom Headers from Tool Parameters": over HTTP a tool whose x-mcp-header annotations break the rules is
+  // left out of the list (and reported), and the valid annotations are remembered so calls to the tool carry their headers.
+  private ListToolsResult MirrorToolHeaders(ListToolsResult page)
+  {
+    List<Tool>? kept = null;
+    for (var i = 0; i < page.Tools.Count; i++)
+    {
+      var tool = page.Tools[i];
+      if (Transports.HeaderMirroring.TryRead(tool, out var parameters, out var reason))
+      {
+        _httpChannel!.SetToolHeaders(tool.Name, parameters);
+        kept?.Add(tool);
+        continue;
+      }
+
+      Diagnostics.ContextDiagnostics.Publish(Diagnostics.DiagnosticKind.InvalidMessage, "Tool '" + tool.Name + "' was left out of the tool list: " + reason + ".", Methods.ToolsList);
+      kept ??= [.. page.Tools.GetRange(0, i)];
+    }
+
+    return kept is null
+      ? page
+      : new ListToolsResult { Tools = kept, NextCursor = page.NextCursor, TtlMs = page.TtlMs, CacheScope = page.CacheScope, Meta = page.Meta, ResultType = page.ResultType, AdditionalProperties = page.AdditionalProperties };
   }
 
   /// <summary>Forgets every cached list and read result, so the next call asks the server again.</summary>
@@ -382,7 +427,11 @@ public sealed partial class ContextClient : IAsyncDisposable
   }
 
   /// <summary>Closes the connection.</summary>
-  public async ValueTask DisposeAsync() => await _rpc.DisposeAsync().ConfigureAwait(false);
+  public async ValueTask DisposeAsync()
+  {
+    await _rpc.DisposeAsync().ConfigureAwait(false);
+    EndSubscriptions();
+  }
 
   // 2026-07-28 versioning, "Backward Compatibility with Initialization-Based Versions": try the modern probe first, treat a failure that is
   // not a recognized modern error (or silence) as a legacy server, remember what worked. The era cache only changes the order.
@@ -489,6 +538,10 @@ public sealed partial class ContextClient : IAsyncDisposable
         {
           raw = await _rpc.SendRequestAsync(method, encoded, cancellationToken).ConfigureAwait(false);
         }
+        catch (JsonRpcRemoteException remote) when (IsTransportFailure(remote.Error))
+        {
+          throw (Exception?)AuthorizationFrom(remote.Error) ?? new TransportException(remote.Error.Message);
+        }
         catch (JsonRpcRemoteException remote)
         {
           throw ProtocolException.FromError(remote.Error);
@@ -539,6 +592,39 @@ public sealed partial class ContextClient : IAsyncDisposable
       }
     }
   }
+
+  // A 401 or 403 from the HTTP transport, as the typed error that carries the server's challenge.
+  private static AuthorizationException? AuthorizationFrom(Exception closed)
+  {
+    for (var inner = closed; inner is not null; inner = inner.InnerException)
+    {
+      if (inner is Transports.HttpAuthFailure failure)
+      {
+        return new AuthorizationException(failure.Message, failure.Status, ParseChallenges(failure.Challenge));
+      }
+    }
+
+    return null;
+  }
+
+  private static AuthorizationException? AuthorizationFrom(JsonRpcError error)
+  {
+    if (error.Data.ValueKind != JsonValueKind.Object || !error.Data.TryGetProperty("httpStatus", out var status) || !status.TryGetInt32(out var code) || code is not (401 or 403))
+    {
+      return null;
+    }
+
+    var header = error.Data.TryGetProperty("wwwAuthenticate", out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+    return new AuthorizationException(error.Message, code, ParseChallenges(header));
+  }
+
+  private static IReadOnlyList<OAuth.BearerChallenge> ParseChallenges(string? header) =>
+    header is null ? [] : OAuth.BearerChallenge.Parse([header]);
+
+  // The HTTP transport reports what went wrong below the protocol (no connection, an HTTP error status) as an error marked in its data.
+  private static bool IsTransportFailure(JsonRpcError error) =>
+    error.Code == Transports.HttpChannel.HttpErrorCode && error.Data.ValueKind == JsonValueKind.Object
+    && error.Data.TryGetProperty("transport", out var marker) && marker.ValueKind == JsonValueKind.True;
 
   private async ValueTask<RequestParams> AnswerAsync(string method, RequestParams parameters, InputRequiredResult asked, CancellationToken cancellationToken)
   {
@@ -630,6 +716,7 @@ public sealed partial class ContextClient : IAsyncDisposable
         break;
     }
 
+    RouteToSubscriptions(notification);
     NotificationReceived?.Invoke(notification);
   }
 
