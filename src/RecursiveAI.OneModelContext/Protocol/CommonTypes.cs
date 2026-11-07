@@ -104,6 +104,21 @@ public class CacheableResult : Result
   /// <summary>Who may cache it: <c>public</c> or <c>private</c>. Absent on legacy results.</summary>
   [JsonPropertyName("cacheScope")]
   public string? CacheScope { get; init; }
+
+  /// <summary>
+  /// True when the client answered from memory because the server's <c>ttlMs</c> had not run out, so no request was sent. Always false on
+  /// the server side and on the wire.
+  /// </summary>
+  [JsonIgnore]
+  public bool FromCache { get; private set; }
+
+  // A cached result is shared by every caller, so a hit hands out a copy that carries the flag instead of marking the shared one.
+  internal CacheableResult AsCached()
+  {
+    var copy = (CacheableResult)MemberwiseClone();
+    copy.FromCache = true;
+    return copy;
+  }
 }
 
 /// <summary>A cacheable result with a pagination cursor.</summary>

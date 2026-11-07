@@ -32,6 +32,10 @@ public class DeprecatedFeatureTests
   [InlineData("await client.NotifyRootsListChangedAsync();", "OMC0001", "tool parameters, resource URIs or server configuration")]
   [InlineData("await ctx.SampleAsync(null!);", "OMC0002", "LLM provider APIs")]
   [InlineData("var c = new SamplingCapability();", "OMC0002", "LLM provider APIs")]
+  [InlineData("await using var c = await ModelContext.ConnectAsync(\"x\", onSample: (r, t) => default);", "OMC0002", "LLM provider APIs")]
+  [InlineData("await using var c = await ModelContext.ConnectAsync(\"x\", onListRoots: t => default);", "OMC0001", "tool parameters")]
+  [InlineData("var o = new ContextClientOptions { OnSample = (r, t) => default };", "OMC0002", "LLM provider APIs")]
+  [InlineData("var o = new ContextClientOptions { OnListRoots = t => default };", "OMC0001", "tool parameters")]
   [InlineData("await ctx.LogAsync(\"info\", \"x\");", "OMC0003", "standard error")]
   [InlineData("await client.SetLoggingLevelAsync(\"info\");", "OMC0003", "OpenTelemetry")]
   public void Using_a_deprecated_feature_warns_with_its_migration(string body, string id, string migration)
@@ -44,6 +48,6 @@ public class DeprecatedFeatureTests
   [Fact]
   public void The_active_utilities_do_not_warn()
   {
-    Assert.Empty(Compile("await ctx.ReportProgressAsync(1); await ctx.ConfirmAsync(\"ok?\"); await client.ListToolsAsync();"));
+    Assert.Empty(Compile("await ctx.ReportProgressAsync(1); await ctx.ConfirmAsync(\"ok?\"); await client.ListToolsAsync(); await using var c = await ModelContext.ConnectAsync(\"x\", onConfirm: (m, t) => ValueTask.FromResult(true));"));
   }
 }

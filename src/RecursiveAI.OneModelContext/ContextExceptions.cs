@@ -112,7 +112,13 @@ public sealed class ProtocolVersionException : ProtocolException
 
   private static string Describe(IReadOnlyList<string> local, IReadOnlyList<string> remote, string? requested)
   {
-    var text = "No common protocol version. This side speaks " + Eras(local) + "; the peer speaks " + (remote.Count == 0 ? "no version it named" : Eras(remote)) + ".";
+    var text = "No common protocol version. This side speaks " + Eras(local) + "; " + (remote.Count == 0 ? "the peer named no supported versions." : "the peer speaks " + Eras(remote) + ".");
+    if (remote.Count == 0)
+    {
+      // A server on an older revision answers the 2026-07-28 request with an error that lists no versions; a pinned era cannot fall back.
+      text += " An older server answers a 2026-07-28 request that way: connect with EraPreference.Auto or EraPreference.Legacy to talk to it.";
+    }
+
     return requested is null ? text : text + " Requested: " + requested + ".";
   }
 

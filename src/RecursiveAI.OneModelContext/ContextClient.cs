@@ -35,7 +35,10 @@ public sealed class ContextClientOptions
     Version = typeof(ContextClient).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "0",
   };
 
-  /// <summary>What the client supports; only list what <see cref="RequestHandler"/> can answer. Default: nothing.</summary>
+  /// <summary>
+  /// What the client supports; only list what the handlers can answer. Default: nothing. Setting <see cref="OnElicit"/>, <see cref="OnConfirm"/>,
+  /// <see cref="OnSample"/> or <see cref="OnListRoots"/> adds the matching capability, so it need not be listed here.
+  /// </summary>
   public ClientCapabilities Capabilities { get; init; } = new();
 
   /// <summary>The revisions the client speaks, newest first. Default <see cref="ProtocolVersions.Supported"/>.</summary>
@@ -46,6 +49,28 @@ public sealed class ContextClientOptions
 
   /// <summary>Answers what the server asks of the client: elicitation, and the deprecated sampling and roots.</summary>
   public IClientRequestHandler? RequestHandler { get; init; }
+
+  /// <summary>
+  /// Answers the server's questions to the user (form and URL elicitation). Setting it declares the elicitation capability. Return
+  /// <see cref="ElicitResult.Accept"/>, <see cref="ElicitResult.Decline"/> or <see cref="ElicitResult.Cancel"/>. Takes precedence over
+  /// <see cref="RequestHandler"/> for elicitation. Default: none.
+  /// </summary>
+  public Func<ElicitRequestParams, CancellationToken, ValueTask<ElicitResult>>? OnElicit { get; init; }
+
+  /// <summary>
+  /// Answers the server's yes/no questions (the ones <see cref="RequestContext.ConfirmAsync"/> asks) without the host knowing the schema:
+  /// it gets the message and returns true for yes. Other elicitation goes to <see cref="OnElicit"/>; without that, it is declined.
+  /// Setting it declares the elicitation capability. Default: none.
+  /// </summary>
+  public Func<string, CancellationToken, ValueTask<bool>>? OnConfirm { get; init; }
+
+  /// <summary>Answers the server's requests for a model completion (<c>sampling/createMessage</c>). Setting it declares the sampling capability. Default: none.</summary>
+  [Obsolete(DeprecatedFeatures.Sampling, DiagnosticId = DeprecatedFeatures.SamplingId)]
+  public Func<CreateMessageRequestParams, CancellationToken, ValueTask<CreateMessageResult>>? OnSample { get; init; }
+
+  /// <summary>Answers the server's request for the client's roots (<c>roots/list</c>). Setting it declares the roots capability. Default: none.</summary>
+  [Obsolete(DeprecatedFeatures.Roots, DiagnosticId = DeprecatedFeatures.RootsId)]
+  public Func<CancellationToken, ValueTask<ListRootsResult>>? OnListRoots { get; init; }
 
   /// <summary>How long negotiation may take. Default 30 seconds.</summary>
   public TimeSpan ConnectTimeout { get; init; } = TimeSpan.FromSeconds(30);
@@ -107,13 +132,15 @@ public sealed partial class ContextClient : IAsyncDisposable
   private readonly ClientSession _session;
   private readonly ClientHello _hello;
   private readonly ContextClientOptions _options;
+  private readonly IClientRequestHandler? _handler;
   private readonly Task<JsonRpcCloseReason> _run;
   private readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.Ordinal);
   private readonly ConcurrentDictionary<string, IProgress<ProgressNotificationParams>> _progress = new(StringComparer.Ordinal);
   private long _progressCounter;
 
-  private ContextClient(JsonRpcConnection rpc, ClientSession session, ClientHello hello, ContextClientOptions options, Task<JsonRpcCloseReason> run)
+  private ContextClient(JsonRpcConnection rpc, ClientSession session, ClientHello hello, ContextClientOptions options, IClientRequestHandler? handler, Task<JsonRpcCloseReason> run)
   {
+    _handler = handler;
     _rpc = rpc;
     _session = session;
     _hello = hello;
@@ -173,7 +200,7 @@ public sealed partial class ContextClient : IAsyncDisposable
     var hello = new ClientHello
     {
       ClientInfo = options.ClientInfo,
-      Capabilities = options.Capabilities,
+      Capabilities = CallbackRequestHandler.Declare(options),
       SupportedVersions = options.SupportedVersions,
       TimeProvider = options.TimeProvider,
     };
@@ -183,7 +210,7 @@ public sealed partial class ContextClient : IAsyncDisposable
       using var timeout = new CancellationTokenSource(options.ConnectTimeout, options.TimeProvider);
       using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
       var session = await NegotiateAsync(rpc, hello, options, options.ServerKey ?? transport.ServerKey, linked.Token).ConfigureAwait(false);
-      var client = new ContextClient(rpc, session, hello, options, run);
+      var client = new ContextClient(rpc, session, hello, options, CallbackRequestHandler.For(options), run);
       holder.Client = client;
       return client;
     }
@@ -199,20 +226,22 @@ public sealed partial class ContextClient : IAsyncDisposable
     }
   }
 
-  /// <summary>Lists every tool, following pages up to <see cref="ContextClientOptions.MaxListPages"/>.</summary>
+  /// <summary>Lists every tool, following pages up to <see cref="ContextClientOptions.MaxListPages"/>. <see cref="ListedItems{T}.FromCache"/> says whether no request was needed.</summary>
   /// <param name="cancellationToken">Cancels the call.</param>
-  public async ValueTask<IReadOnlyList<Tool>> ListToolsAsync(CancellationToken cancellationToken = default)
+  public async ValueTask<ListedItems<Tool>> ListToolsAsync(CancellationToken cancellationToken = default)
   {
     var all = new List<Tool>();
+    var cached = true;
     string? cursor = null;
     for (var page = 0; page < _options.MaxListPages; page++)
     {
       var result = await ListToolsPageAsync(cursor, cancellationToken).ConfigureAwait(false);
       all.AddRange(result.Tools);
+      cached &= result.FromCache;
       cursor = result.NextCursor;
       if (cursor is null)
       {
-        return all;
+        return new ListedItems<Tool>(all, cached);
       }
     }
 
@@ -227,18 +256,20 @@ public sealed partial class ContextClient : IAsyncDisposable
 
   /// <summary>Lists every resource.</summary>
   /// <param name="cancellationToken">Cancels the call.</param>
-  public async ValueTask<IReadOnlyList<Resource>> ListResourcesAsync(CancellationToken cancellationToken = default)
+  public async ValueTask<ListedItems<Resource>> ListResourcesAsync(CancellationToken cancellationToken = default)
   {
     var all = new List<Resource>();
+    var cached = true;
     string? cursor = null;
     for (var page = 0; page < _options.MaxListPages; page++)
     {
       var result = await ListResourcesPageAsync(cursor, cancellationToken).ConfigureAwait(false);
       all.AddRange(result.Resources);
+      cached &= result.FromCache;
       cursor = result.NextCursor;
       if (cursor is null)
       {
-        return all;
+        return new ListedItems<Resource>(all, cached);
       }
     }
 
@@ -253,18 +284,20 @@ public sealed partial class ContextClient : IAsyncDisposable
 
   /// <summary>Lists every resource template.</summary>
   /// <param name="cancellationToken">Cancels the call.</param>
-  public async ValueTask<IReadOnlyList<ResourceTemplate>> ListResourceTemplatesAsync(CancellationToken cancellationToken = default)
+  public async ValueTask<ListedItems<ResourceTemplate>> ListResourceTemplatesAsync(CancellationToken cancellationToken = default)
   {
     var all = new List<ResourceTemplate>();
+    var cached = true;
     string? cursor = null;
     for (var page = 0; page < _options.MaxListPages; page++)
     {
       var result = await CallAsync<ListResourceTemplatesResult>(Methods.ResourcesTemplatesList, new PaginatedRequestParams { Cursor = cursor }, cancellationToken, cacheKey: Methods.ResourcesTemplatesList + "\0" + cursor).ConfigureAwait(false);
       all.AddRange(result.ResourceTemplates);
+      cached &= result.FromCache;
       cursor = result.NextCursor;
       if (cursor is null)
       {
-        return all;
+        return new ListedItems<ResourceTemplate>(all, cached);
       }
     }
 
@@ -273,18 +306,20 @@ public sealed partial class ContextClient : IAsyncDisposable
 
   /// <summary>Lists every prompt.</summary>
   /// <param name="cancellationToken">Cancels the call.</param>
-  public async ValueTask<IReadOnlyList<Prompt>> ListPromptsAsync(CancellationToken cancellationToken = default)
+  public async ValueTask<ListedItems<Prompt>> ListPromptsAsync(CancellationToken cancellationToken = default)
   {
     var all = new List<Prompt>();
+    var cached = true;
     string? cursor = null;
     for (var page = 0; page < _options.MaxListPages; page++)
     {
       var result = await CallAsync<ListPromptsResult>(Methods.PromptsList, new PaginatedRequestParams { Cursor = cursor }, cancellationToken, cacheKey: Methods.PromptsList + "\0" + cursor).ConfigureAwait(false);
       all.AddRange(result.Prompts);
+      cached &= result.FromCache;
       cursor = result.NextCursor;
       if (cursor is null)
       {
-        return all;
+        return new ListedItems<Prompt>(all, cached);
       }
     }
 
@@ -435,7 +470,7 @@ public sealed partial class ContextClient : IAsyncDisposable
     {
       if (cacheKey is not null && _options.CacheResults && TryGetFresh(cacheKey) is T cached)
       {
-        return cached;
+        return cached is CacheableResult shared ? (T)(object)shared.AsCached() : cached;
       }
 
       if (progress is not null)
@@ -522,9 +557,9 @@ public sealed partial class ContextClient : IAsyncDisposable
           throw new ProtocolException(JsonRpcErrorCodes.InternalError, "The server asked for input with the unknown method '" + request.Method + "'.");
         }
 
-        if (_options.RequestHandler is not { } handler)
+        if (_handler is not { } handler)
         {
-          throw new ContextException("The server asked the client for input (" + request.Method + ") to finish '" + method + "', and no RequestHandler is configured.");
+          throw new ContextException("The server asked the client for input (" + request.Method + ") to finish '" + method + "', and the client has no handler for it (set OnElicit, OnConfirm, OnSample, OnListRoots or RequestHandler).");
         }
 
         var answer = await handler.HandleAsync(request.Method, request.Params, cancellationToken).ConfigureAwait(false);
@@ -645,7 +680,7 @@ public sealed partial class ContextClient : IAsyncDisposable
       return new JsonRpcResultResponse(request.Id, ContextServer.EmptyObject);
     }
 
-    if (_options.RequestHandler is not { } handler)
+    if (_handler is not { } handler)
     {
       return new JsonRpcErrorResponse(request.Id, new JsonRpcError(JsonRpcErrorCodes.MethodNotFound, "Method not found: " + request.Method + "."));
     }

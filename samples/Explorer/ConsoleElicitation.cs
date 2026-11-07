@@ -1,34 +1,38 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using RecursiveAI.OneModelContext;
 using RecursiveAI.OneModelContext.Protocol;
-using RecursiveAI.OneModelContext.Wire;
 
 namespace Explorer;
 
 /// <summary>
 /// Answers a server's questions by asking the person at the terminal. A real host shows a dialog instead; the shape is the same:
-/// the server sends a message and a flat form schema, the host collects values and returns accept, decline or cancel.
+/// the server sends a message, the host collects an answer and returns it. Plug the two methods into <see cref="ContextClientOptions"/>.
 /// </summary>
 /// <param name="input">Where answers come from.</param>
 /// <param name="output">Where questions are shown.</param>
-public sealed class ConsoleElicitation(TextReader input, TextWriter output) : IClientRequestHandler
+public sealed class ConsoleElicitation(TextReader input, TextWriter output)
 {
-  /// <summary>The client capabilities to connect with. A server only asks for what the client says it can show.</summary>
-  public static ClientCapabilities Capabilities { get; } = new() { Elicitation = new ElicitationCapability() };
-
-  /// <inheritdoc />
-  public ValueTask<Result> HandleAsync(string method, JsonElement parameters, CancellationToken cancellationToken)
+  /// <summary>A yes/no question (<see cref="ContextClientOptions.OnConfirm"/>): the library has already recognised the form.</summary>
+  public ValueTask<bool> ConfirmAsync(string message, CancellationToken cancellationToken)
   {
-    if (method != "elicitation/create")
+    output.Write($"{message} [y/N]: ");
+    return ValueTask.FromResult(input.ReadLine()?.Trim().StartsWith('y') == true);
+  }
+
+  /// <summary>Any other question (<see cref="ContextClientOptions.OnElicit"/>): a form of primitive fields.</summary>
+  public ValueTask<ElicitResult> AskAsync(ElicitRequestParams request, CancellationToken cancellationToken)
+  {
+    if (request.Mode == "url")
     {
-      // Sampling and roots are deprecated and this client does not offer them; method-not-found is the polite answer.
-      throw new ProtocolException(-32601, $"This client does not answer {method}.");
+      // A form-only terminal host cannot send the user to a page.
+      return ValueTask.FromResult(ElicitResult.Decline());
     }
 
-    output.WriteLine(parameters.GetProperty("message").GetString());
+    output.WriteLine(request.Message);
     var values = new Dictionary<string, JsonElement>();
-    if (parameters.TryGetProperty("requestedSchema", out var schema) && schema.TryGetProperty("properties", out var properties))
+    if (request.RequestedSchema.ValueKind == JsonValueKind.Object && request.RequestedSchema.TryGetProperty("properties", out var properties))
     {
       foreach (var property in properties.EnumerateObject())
       {
@@ -37,7 +41,7 @@ public sealed class ConsoleElicitation(TextReader input, TextWriter output) : IC
         var line = input.ReadLine();
         if (line is null || line.Trim().Equals("cancel", StringComparison.OrdinalIgnoreCase))
         {
-          return ValueTask.FromResult<Result>(new ElicitResult { Action = "cancel" });
+          return ValueTask.FromResult(ElicitResult.Cancel());
         }
 
         values[property.Name] = type switch
@@ -49,13 +53,13 @@ public sealed class ConsoleElicitation(TextReader input, TextWriter output) : IC
       }
     }
 
-    return ValueTask.FromResult<Result>(new ElicitResult { Action = "accept", Content = values });
+    return ValueTask.FromResult(ElicitResult.Accept(values));
   }
 }
 
-[System.Text.Json.Serialization.JsonSerializable(typeof(bool))]
-[System.Text.Json.Serialization.JsonSerializable(typeof(double))]
-[System.Text.Json.Serialization.JsonSerializable(typeof(string))]
-internal sealed partial class SampleJson : System.Text.Json.Serialization.JsonSerializerContext
+[JsonSerializable(typeof(bool))]
+[JsonSerializable(typeof(double))]
+[JsonSerializable(typeof(string))]
+internal sealed partial class SampleJson : JsonSerializerContext
 {
 }
