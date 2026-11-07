@@ -233,7 +233,7 @@ public sealed partial class ContextClient : IAsyncDisposable
     catch (Exception ex) when (ex is JsonRpcClosedException)
     {
       await rpc.DisposeAsync().ConfigureAwait(false);
-      throw (Exception?)AuthorizationFrom(ex) ?? new TransportException("The connection closed during negotiation.", ex);
+      throw (Exception?)AuthorizationFrom(ex) ?? (Exception?)SignInFailureFrom(ex) ?? new TransportException("The connection closed during negotiation.", ex);
     }
     catch
     {
@@ -705,6 +705,20 @@ public sealed partial class ContextClient : IAsyncDisposable
       if (inner is Transports.HttpAuthFailure failure)
       {
         return new AuthorizationException(failure.Message, failure.Status, ParseChallenges(failure.Challenge));
+      }
+    }
+
+    return null;
+  }
+
+  // The OAuth client could not sign in (no user agent, discovery failed, the user refused): that error, not a dropped connection.
+  private static OAuth.OAuthException? SignInFailureFrom(Exception closed)
+  {
+    for (var inner = closed; inner is not null; inner = inner.InnerException)
+    {
+      if (inner is OAuth.OAuthException failure)
+      {
+        return failure;
       }
     }
 

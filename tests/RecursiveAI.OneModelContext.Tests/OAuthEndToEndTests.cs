@@ -167,4 +167,21 @@ public sealed class OAuthEndToEndTests : IAsyncDisposable
 
     Assert.Equal(0, _documents.Hits);
   }
+
+  [Fact]
+  public async Task A_failed_sign_in_reaches_the_caller_as_the_OAuth_error_without_a_token()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    // No user agent, grant or stored token: the handler cannot sign in. The caller sees why, not a dropped connection.
+    using var oauth = new OAuthClient(new OAuthClientOptions(_resource) { TimeProvider = _time });
+    using var http = oauth.CreateHttpClient();
+
+    var failure = await Assert.ThrowsAsync<OAuthException>(async () =>
+    {
+      await using var client = await ContextClient.ConnectAsync(ContextTransport.Http(_resource, http), cancellationToken: ct);
+    });
+
+    Assert.Equal("authorization_required", failure.Error);
+    Assert.DoesNotContain("Bearer", failure.Message);
+  }
 }
