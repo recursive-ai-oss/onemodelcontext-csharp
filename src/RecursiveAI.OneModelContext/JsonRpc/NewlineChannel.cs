@@ -41,6 +41,14 @@ public interface IJsonRpcChannel : IAsyncDisposable
 }
 
 /// <summary>
+/// Marks a channel whose <see cref="IJsonRpcChannel.WriteAsync"/> may be called from several threads at once, so the connection need not
+/// serialise sends. The HTTP client is one: each message is its own request.
+/// </summary>
+internal interface IConcurrentWriteChannel
+{
+}
+
+/// <summary>
 /// Newline-delimited JSON-RPC over a pair of streams: each message is one line of UTF-8 JSON that contains no raw newline,
 /// terminated by <c>\n</c> (the MCP stdio framing). A trailing <c>\r</c> is ignored and empty lines are skipped.
 /// </summary>
@@ -48,6 +56,9 @@ public interface IJsonRpcChannel : IAsyncDisposable
 /// Overrun: a line longer than the bound ends the channel with <see cref="JsonRpcChannelStatus.MessageTooLong"/>; the bytes are
 /// discarded and the caller closes the connection, because the stream cannot be resynchronised safely. Memory use is bounded by
 /// the line bound plus one read chunk. Buffers come from <see cref="ArrayPool{T}"/> and are cleared when returned.
+/// Writes are queued and sent by one background drain, so a caller that is also the reader does not wait for the stream, and messages that
+/// pile up while a write is in flight go out together in the next one. Order is kept. At most <see cref="MaxQueuedBytes"/> wait in the
+/// queue: a writer past that waits until the stream has taken some (backpressure). A stream failure is reported by the next write.
 /// </remarks>
 public sealed class NewlineChannel : IJsonRpcChannel
 {
@@ -55,6 +66,9 @@ public sealed class NewlineChannel : IJsonRpcChannel
   public const int DefaultMaxLineBytes = 8 * 1024 * 1024;
 
   private const int InitialBuffer = 16 * 1024;
+
+  /// <summary>Most bytes queued for the stream before a writer waits: 1 MiB (a single larger message is still accepted whole).</summary>
+  public const int MaxQueuedBytes = 1024 * 1024;
 
   private readonly Stream _input;
   private readonly Stream _output;
@@ -66,6 +80,14 @@ public sealed class NewlineChannel : IJsonRpcChannel
   private int _scanned;
   private bool _finished;
   private bool _disposed;
+  private readonly object _gate = new();
+  private readonly CancellationTokenSource _stopWriting = new();
+  private byte[] _queue = [];
+  private int _queued;
+  private bool _draining;
+  private Task _drain = Task.CompletedTask;
+  private TaskCompletionSource? _space;
+  private Exception? _writeFault;
 
   /// <summary>Creates a channel over a duplex stream.</summary>
   /// <param name="duplex">A stream that can read and write.</param>
@@ -170,20 +192,98 @@ public sealed class NewlineChannel : IJsonRpcChannel
   }
 
   /// <inheritdoc />
-  public async ValueTask WriteAsync(ReadOnlyMemory<byte> message, CancellationToken cancellationToken)
+  /// <exception cref="IOException">An earlier write to the stream failed.</exception>
+  public ValueTask WriteAsync(ReadOnlyMemory<byte> message, CancellationToken cancellationToken)
   {
     ObjectDisposedException.ThrowIf(_disposed, this);
-    var rented = ArrayPool<byte>.Shared.Rent(message.Length + 1);
-    try
+    Task? space = null;
+    lock (_gate)
     {
-      message.CopyTo(rented);
-      rented[message.Length] = (byte)'\n';
-      await _output.WriteAsync(rented.AsMemory(0, message.Length + 1), cancellationToken).ConfigureAwait(false);
-      await _output.FlushAsync(cancellationToken).ConfigureAwait(false);
+      if (_writeFault is { } fault)
+      {
+        throw new IOException("An earlier write failed: " + fault.Message, fault);
+      }
+
+      var needed = _queued + message.Length + 1;
+      if (needed > _queue.Length)
+      {
+        var bigger = ArrayPool<byte>.Shared.Rent(Math.Max(needed, Math.Min(_queue.Length * 2, MaxQueuedBytes)));
+        _queue.AsSpan(0, _queued).CopyTo(bigger);
+        ArrayPool<byte>.Shared.Return(_queue, clearArray: true);
+        _queue = bigger;
+      }
+
+      message.Span.CopyTo(_queue.AsSpan(_queued));
+      _queue[_queued + message.Length] = (byte)'\n';
+      _queued += message.Length + 1;
+      if (!_draining)
+      {
+        _draining = true;
+        _drain = Task.Run(DrainAsync, CancellationToken.None);
+      }
+
+      if (_queued > MaxQueuedBytes)
+      {
+        space = (_space ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+      }
     }
-    finally
+
+    return space is null ? ValueTask.CompletedTask : new ValueTask(space.WaitAsync(cancellationToken));
+  }
+
+  // The single writer to the stream: takes everything queued, writes it as one block, repeats until nothing is left.
+  private async Task DrainAsync()
+  {
+    var spare = Array.Empty<byte>();
+    while (true)
     {
-      ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+      byte[] block;
+      int length;
+      var spin = new SpinWait();
+      while (Volatile.Read(ref _queued) == 0 && spin.Count < 20)
+      {
+        // New messages usually follow within microseconds under load; waiting briefly saves a thread hand-off.
+        spin.SpinOnce(sleep1Threshold: -1);
+      }
+
+      lock (_gate)
+      {
+        if (_queued == 0)
+        {
+          _draining = false;
+          ArrayPool<byte>.Shared.Return(spare, clearArray: true);
+          return;
+        }
+
+        block = _queue;
+        length = _queued;
+        _queue = spare;
+        _queued = 0;
+        _space?.TrySetResult();
+        _space = null;
+      }
+
+      try
+      {
+        await _output.WriteAsync(block.AsMemory(0, length), _stopWriting.Token).ConfigureAwait(false);
+        await _output.FlushAsync(_stopWriting.Token).ConfigureAwait(false);
+      }
+      catch (Exception ex) when (ex is IOException or ObjectDisposedException or NotSupportedException or OperationCanceledException)
+      {
+        lock (_gate)
+        {
+          _writeFault = ex;
+          _draining = false;
+          _queued = 0;
+          _space?.TrySetException(new IOException("The stream failed: " + ex.Message, ex));
+          _space = null;
+        }
+
+        ArrayPool<byte>.Shared.Return(block, clearArray: true);
+        return;
+      }
+
+      spare = block;
     }
   }
 
@@ -196,6 +296,23 @@ public sealed class NewlineChannel : IJsonRpcChannel
     }
 
     _disposed = true;
+    try
+    {
+      // Queued output still goes out, unless the stream is stuck on a peer that stopped reading.
+      await _drain.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+    }
+    catch (TimeoutException)
+    {
+      await _stopWriting.CancelAsync().ConfigureAwait(false);
+    }
+
+    lock (_gate)
+    {
+      ArrayPool<byte>.Shared.Return(_queue, clearArray: true);
+      _queue = [];
+      _queued = 0;
+    }
+
     ArrayPool<byte>.Shared.Return(_buffer, clearArray: true);
     _buffer = [];
     if (!_leaveOpen)

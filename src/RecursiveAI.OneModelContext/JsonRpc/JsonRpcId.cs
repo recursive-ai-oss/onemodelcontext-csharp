@@ -47,6 +47,9 @@ public readonly struct JsonRpcId : IEquatable<JsonRpcId>
   /// <param name="value">The number.</param>
   public static JsonRpcId FromNumber(long value) => new(value.ToString(CultureInfo.InvariantCulture), true);
 
+  // A number id from its verbatim text, for readers that already hold the token (no JsonDocument needed).
+  internal static JsonRpcId FromNumberText(string text) => new(text, true);
+
   /// <summary>Reads an id from a JSON element.</summary>
   /// <param name="element">A string or number element.</param>
   /// <param name="id">The id, when the element is a string or a number.</param>
