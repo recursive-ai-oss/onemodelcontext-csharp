@@ -7,7 +7,7 @@
     <IsTestProject>true</IsTestProject>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>RecursiveAI.OneModelContext.EntityFrameworkCore.Tests</RootNamespace>
-    <NoWarn>$(NoWarn);OMC0004</NoWarn>
+    <NoWarn>$(NoWarn);OMC0004;OMCX0001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
