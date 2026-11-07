@@ -12,4 +12,7 @@
   <Folder Name="/conformance/">
     <Project Path="conformance/Server/RecursiveAI.OneModelContext.ConformanceServer.csproj" />
   </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/StdioServer/RecursiveAI.OneModelContext.Samples.StdioServer.csproj" />
+  </Folder>
 </Solution>
