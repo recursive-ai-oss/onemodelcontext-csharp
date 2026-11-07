@@ -44,6 +44,20 @@ public sealed class StreamableHttpOptions
   /// <summary>Largest request body accepted, in bytes. A larger body gets 413. Default 8 MiB.</summary>
   public int MaxRequestBodyBytes { get; init; } = 8 * 1024 * 1024;
 
+  /// <summary>
+  /// Most bytes of request bodies the endpoint holds in memory at once, across all requests. A body is charged its declared
+  /// <c>Content-Length</c> (or its size so far when chunked) until its request ends; a request that would exceed the budget gets 503
+  /// with <c>Retry-After</c>. Bounds memory when many clients send large bodies together. Default 64 MiB.
+  /// </summary>
+  public long MaxInFlightBodyBytes { get; init; } = 64L * 1024 * 1024;
+
+  /// <summary>
+  /// How long a legacy GET event stream stays attached before the server ends it with a <c>retry</c> field; the client then reconnects
+  /// with <c>Last-Event-ID</c> and loses nothing. Evicts readers that hold a stream open and never read it. Checked every
+  /// <see cref="KeepAliveInterval"/>, so it can overshoot by that much. Default 1 hour; zero keeps streams until the client leaves.
+  /// </summary>
+  public TimeSpan MaxStreamLifetime { get; init; } = TimeSpan.FromHours(1);
+
   /// <summary>How long reading one request body may take. A slower sender gets 408. Default 30 seconds.</summary>
   public TimeSpan BodyReadTimeout { get; init; } = TimeSpan.FromSeconds(30);
 

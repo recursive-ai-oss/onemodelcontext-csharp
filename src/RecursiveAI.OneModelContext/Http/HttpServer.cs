@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -32,6 +33,7 @@ public sealed class HttpServer : IAsyncDisposable
   private readonly SemaphoreSlim _slots;
   private Socket? _listener;
   private Task? _acceptLoop;
+  private readonly ConcurrentDictionary<IPAddress, int> _perAddress = new();
   private long _nextId;
 
   /// <summary>Creates a server. Nothing listens until <see cref="Start"/>.</summary>
@@ -47,7 +49,7 @@ public sealed class HttpServer : IAsyncDisposable
     Shutdown = _shutdown.Token;
     Options = options ?? new HttpServerOptions();
     Time = timeProvider ?? TimeProvider.System;
-    if (Options.MaxConnections < 1 || Options.MaxHeaderBytes < 1024 || Options.MaxRequestLineBytes < 16 || Options.MaxHeaderCount < 1 || Options.MaxRequestBodyBytes < 0 || Options.Port is < 0 or > 65535)
+    if (Options.MaxConnections < 1 || Options.MaxConnectionsPerAddress < 1 || Options.FirstByteTimeout <= TimeSpan.Zero || Options.MaxHeaderBytes < 1024 || Options.MaxRequestLineBytes < 16 || Options.MaxHeaderCount < 1 || Options.MaxRequestBodyBytes < 0 || Options.Port is < 0 or > 65535)
     {
       throw new ArgumentException("A limit is out of range.", nameof(options));
     }
@@ -94,14 +96,23 @@ public sealed class HttpServer : IAsyncDisposable
 
     if (ShouldWarn(Options))
     {
-      ContextDiagnostics.Publish(
-        DiagnosticKind.Warning,
-        "The HTTP server listens on " + Options.Address + ", which is not a loopback address, without TLS or a trusted proxy. Anyone who can reach the port can use the server.");
+      Warn("The HTTP server listens on " + Options.Address + ", which is not a loopback address, without TLS or a trusted proxy. Anyone who can reach the port can use the server.");
+    }
+    else if (ShouldWarnProxyOnWideBind(Options))
+    {
+      Warn("The HTTP server listens on every interface (" + Options.Address + ") and trusts forwarded headers from " + Options.TrustedProxies.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        + " proxy address(es). Clients that reach the port directly are served too; bind to the proxy's interface or firewall the port.");
     }
 
     var listener = new Socket(Options.Address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
     try
     {
+      if (OperatingSystem.IsWindows())
+      {
+        // Windows lets a second process bind the same port unless the first asks for exclusive use; the other process would then see our requests.
+        listener.ExclusiveAddressUse = true;
+      }
+
       listener.Bind(new IPEndPoint(Options.Address, Options.Port));
       listener.Listen(128);
     }
@@ -118,6 +129,39 @@ public sealed class HttpServer : IAsyncDisposable
   /// <summary>Whether starting with these options deserves the non-loopback warning.</summary>
   internal static bool ShouldWarn(HttpServerOptions options) =>
     !IPAddress.IsLoopback(options.Address) && options.Certificate is null && options.TrustedProxies.Count == 0;
+
+  /// <summary>Whether the listener is bound to every interface while trusting proxies: direct clients can reach it too.</summary>
+  internal static bool ShouldWarnProxyOnWideBind(HttpServerOptions options) =>
+    options.TrustedProxies.Count > 0 && (options.Address.Equals(IPAddress.Any) || options.Address.Equals(IPAddress.IPv6Any));
+
+  /// <summary>Where <c>Warn</c> writes when nobody subscribed to diagnostics; tests replace it.</summary>
+  internal static Func<TextWriter> WarningWriter { get; set; } = static () => Console.Error;
+
+  // A warning nobody sees protects nobody: with no diagnostics subscriber it goes to standard error, once per server start.
+  // (Standard error never carries protocol traffic, even for a stdio server.)
+  internal static void Warn(string message) => Warn(message, ContextDiagnostics.HasSubscribers, WarningWriter);
+
+  // The subscriber check and the writer are parameters so tests can decide them without touching process-wide state.
+  internal static void Warn(string message, bool hasSubscribers, Func<TextWriter> writer)
+  {
+    if (hasSubscribers)
+    {
+      ContextDiagnostics.Publish(DiagnosticKind.Warning, message);
+      return;
+    }
+
+    try
+    {
+      writer().WriteLine("warning: " + message);
+    }
+    catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+    {
+      // No standard error to write to.
+    }
+  }
+
+  /// <summary>Test seam: runs on each accepted socket before its connection is set up.</summary>
+  internal Action<Socket>? AfterAccept { get; set; }
 
   internal bool IsTrustedProxy(IPAddress? address)
   {
@@ -187,11 +231,59 @@ public sealed class HttpServer : IAsyncDisposable
         continue;
       }
 
-      socket.NoDelay = true;
+      // Everything between accept and the connection task is guarded: a socket that died already, or a failure here, must cost one
+      // connection and release its slot, never end the accept loop.
+      IPAddress? peer = null;
+      var counted = false;
+      HttpConnection connection;
+      try
+      {
+        AfterAccept?.Invoke(socket);
+        peer = Normalize((socket.RemoteEndPoint as IPEndPoint)?.Address);
+        if (peer is not null)
+        {
+          if (!TryCountPeer(peer))
+          {
+            // One address may not hold every slot (slow-connection exhaustion): refuse the surplus at once.
+            socket.Dispose();
+            _slots.Release();
+            continue;
+          }
+
+          counted = true;
+        }
+
+        socket.NoDelay = true;
+        ConfigureKeepAlive(socket);
+        connection = new HttpConnection(this, socket);
+      }
+      catch (Exception ex) when (ex is not OutOfMemoryException)
+      {
+        if (counted)
+        {
+          UncountPeer(peer!);
+        }
+
+        try
+        {
+          socket.Dispose();
+        }
+        catch (Exception disposeFailure) when (disposeFailure is SocketException or ObjectDisposedException)
+        {
+          // Already closed.
+        }
+
+        _slots.Release();
+        ContextDiagnostics.Publish(DiagnosticKind.HandlerFault, "An accepted connection could not be set up (" + ex.GetType().Name + "); it was dropped.", null, ex);
+        continue;
+      }
+
+      // The entry is registered before the task can run to its end, so its removal in finally always finds it.
       var id = Interlocked.Increment(ref _nextId);
-      var connection = new HttpConnection(this, socket);
+      var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
       var task = Task.Run(async () =>
       {
+        await started.Task.ConfigureAwait(false);
         try
         {
           await connection.RunAsync().ConfigureAwait(false);
@@ -199,10 +291,71 @@ public sealed class HttpServer : IAsyncDisposable
         finally
         {
           _connections.TryRemove(id, out _);
+          if (peer is not null)
+          {
+            UncountPeer(peer);
+          }
+
           _slots.Release();
         }
       });
       _connections[id] = (socket, task);
+      started.SetResult();
+    }
+  }
+
+  /// <summary>The number of connections being served, for tests.</summary>
+  internal int ConnectionCount => _connections.Count;
+
+  private static IPAddress? Normalize(IPAddress? address) => address is { IsIPv4MappedToIPv6: true } ? address.MapToIPv4() : address;
+
+  private bool TryCountPeer(IPAddress peer)
+  {
+    lock (_perAddress)
+    {
+      _perAddress.TryGetValue(peer, out var count);
+      if (count >= Options.MaxConnectionsPerAddress)
+      {
+        return false;
+      }
+
+      _perAddress[peer] = count + 1;
+      return true;
+    }
+  }
+
+  private void UncountPeer(IPAddress peer)
+  {
+    lock (_perAddress)
+    {
+      if (_perAddress.TryGetValue(peer, out var count))
+      {
+        if (count <= 1)
+        {
+          _perAddress.TryRemove(peer, out _);
+        }
+        else
+        {
+          _perAddress[peer] = count - 1;
+        }
+      }
+    }
+  }
+
+  // A peer that vanished without closing (power loss, a dropped NAT entry) is found out by the operating system's own probes: first
+  // after 60 s of silence, then every 15 s, giving up after 4 misses. Not every platform lets a program set these; the defaults stay then.
+  private static void ConfigureKeepAlive(Socket socket)
+  {
+    try
+    {
+      socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+      socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 60);
+      socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 15);
+      socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, 4);
+    }
+    catch (Exception ex) when (ex is SocketException or PlatformNotSupportedException or ArgumentException)
+    {
+      // Keep the platform's settings.
     }
   }
 
