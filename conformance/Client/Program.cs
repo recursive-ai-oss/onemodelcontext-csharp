@@ -1,6 +1,8 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using RecursiveAI.OneModelContext;
+using RecursiveAI.OneModelContext.OAuth;
 using RecursiveAI.OneModelContext.Protocol;
 using RecursiveAI.OneModelContext.Wire;
 
@@ -28,10 +30,22 @@ var options = new ContextClientOptions
   SupportedVersions = string.IsNullOrEmpty(version) ? ProtocolVersions.Supported : [version],
 };
 
+// The authorization scenarios run the OAuth client under the HTTP transport; the others connect plainly.
+using var browser = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false });
+OAuthClient? oauth = null;
+HttpClient? authenticated = null;
+if (scenario.StartsWith("auth/", StringComparison.Ordinal))
+{
+  oauth = new OAuthClient(AuthScenarios.Options(endpoint, scenario, new HeadlessUserAgent(new Uri("http://localhost:3000/callback"), browser)));
+  authenticated = oauth.CreateHttpClient();
+}
+
+using var oauthLifetime = oauth;
+using var authenticatedLifetime = authenticated;
 ContextClient client;
 try
 {
-  client = await ContextClient.ConnectAsync(ContextTransport.Http(endpoint), options);
+  client = await ContextClient.ConnectAsync(ContextTransport.Http(endpoint, authenticated), options);
 }
 catch (ContextException ex)
 {
@@ -253,5 +267,67 @@ internal static class Sample
     }
 
     return JsonSerializer.SerializeToElement("test");
+  }
+}
+
+/// <summary>The browser of a headless run: requests the authorization URL and reads the redirect from the answer, without following it.</summary>
+internal sealed class HeadlessUserAgent(Uri redirect, HttpClient http) : IAuthorizationUserAgent
+{
+  public Uri RedirectUri => redirect;
+
+  public async ValueTask<Uri> AuthorizeAsync(Uri authorizationUrl, CancellationToken cancellationToken)
+  {
+    using var response = await http.GetAsync(authorizationUrl, cancellationToken);
+    return response.Headers.Location is { } location
+      ? (location.IsAbsoluteUri ? location : new Uri(authorizationUrl, location))
+      : throw new InvalidOperationException("The authorization endpoint did not redirect.");
+  }
+}
+
+/// <summary>What each authorization scenario hands the client (in MCP_CONFORMANCE_CONTEXT) and how the client is set up for it.</summary>
+internal static class AuthScenarios
+{
+  public static OAuthClientOptions Options(Uri url, string scenario, IAuthorizationUserAgent agent)
+  {
+    var context = Environment.GetEnvironmentVariable("MCP_CONFORMANCE_CONTEXT") is { Length: > 0 } text ? JsonDocument.Parse(text).RootElement : default;
+    string? Ctx(string name) => context.ValueKind == JsonValueKind.Object && context.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+    var clientId = Ctx("client_id");
+    var secret = Ctx("client_secret");
+    switch (scenario)
+    {
+      case "auth/client-credentials-basic":
+        return new OAuthClientOptions(url) { ClientCredentials = new ClientCredentialsGrant(clientId!, secret!) };
+      case "auth/client-credentials-jwt":
+        var pem = Ctx("private_key_pem")!;
+        AsymmetricAlgorithm key = ECDsa.Create();
+        try
+        {
+          key.ImportFromPem(pem);
+        }
+        catch (CryptographicException)
+        {
+          key = RSA.Create();
+          key.ImportFromPem(pem);
+        }
+
+        return new OAuthClientOptions(url) { ClientCredentials = new ClientCredentialsGrant(clientId!, key, Ctx("kid")) };
+      case "auth/enterprise-managed-authorization":
+        var idToken = Ctx("idp_id_token")!;
+        return new OAuthClientOptions(url)
+        {
+          Enterprise = new EnterpriseManagedAuthorization(new Uri(Ctx("idp_token_endpoint")!), _ => ValueTask.FromResult(idToken), clientId!)
+          {
+            ClientSecret = secret,
+            IdentityProviderClientId = Ctx("idp_client_id"),
+          },
+        };
+      default:
+        return new OAuthClientOptions(url)
+        {
+          UserAgent = agent,
+          PreRegistered = scenario is "auth/pre-registration" or "auth/token-endpoint-auth-basic" or "auth/token-endpoint-auth-post" && clientId is not null ? new PreRegisteredClient(clientId, secret) : null,
+          ClientIdMetadataUrl = Ctx("client_id_metadata_url") ?? "https://conformance-test.local/client-metadata.json",
+        };
+    }
   }
 }

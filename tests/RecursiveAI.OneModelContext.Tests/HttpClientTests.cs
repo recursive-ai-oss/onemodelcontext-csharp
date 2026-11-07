@@ -270,13 +270,13 @@ public class HttpClientTests
   }
 
   [Fact]
-  public async Task A_refusing_server_fails_connecting_with_a_transport_error_that_names_the_status_but_no_credentials()
+  public async Task A_401_fails_connecting_with_an_authorization_error_that_names_the_status_but_no_credentials()
   {
     var setup = new Setup(NewServer());
     setup.Handler.Intercept = (_, _, _) => Task.FromResult<HttpResponseMessage?>(EndpointHandler.Plain(HttpStatusCode.Unauthorized, "token abc is bad"));
     var token = "throwaway-" + Guid.NewGuid().ToString("N");
 
-    var error = await Assert.ThrowsAsync<TransportException>(async () => await setup.ConnectAsync(transport: new HttpTransportOptions
+    var error = await Assert.ThrowsAsync<AuthorizationException>(async () => await setup.ConnectAsync(transport: new HttpTransportOptions
     {
       AuthorizeRequest = (request, _) =>
       {
@@ -285,6 +285,7 @@ public class HttpClientTests
       },
     }));
 
+    Assert.Equal(401, error.StatusCode);
     var text = error.ToString();
     Assert.Contains("401", text, StringComparison.Ordinal);
     Assert.DoesNotContain(token, text, StringComparison.Ordinal);
