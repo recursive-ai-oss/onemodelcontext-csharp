@@ -47,7 +47,10 @@ public sealed class GuardedFetchResult
 
   internal static GuardedFetchResult Unchanged(string? eTag, TimeSpan? lifetime) => new() { NotModified = true, ETag = eTag, CacheLifetime = lifetime };
 
-  internal static GuardedFetchResult Fail(string reason) => new() { Failure = reason };
+  internal static GuardedFetchResult Fail(string reason, bool hostTrouble = false) => new() { Failure = reason, HostTrouble = hostTrouble };
+
+  /// <summary>Whether the failure shows the host itself is slow or down (timeout, connect or TLS failure), not that this URL was bad.</summary>
+  internal bool HostTrouble { get; private init; }
 }
 
 /// <summary>Limits and the network policy for <see cref="GuardedHttpFetcher"/>.</summary>
@@ -198,16 +201,16 @@ public sealed class GuardedHttpFetcher : IDisposable
     }
     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
     {
-      return GuardedFetchResult.Fail("The fetch took too long.");
+      return GuardedFetchResult.Fail("The fetch took too long.", hostTrouble: true);
     }
     catch (HttpRequestException ex)
     {
       // The inner message names the refused address class, never a body.
-      return GuardedFetchResult.Fail(ex.InnerException is BlockedAddressException blocked ? blocked.Message : "The server could not be reached.");
+      return GuardedFetchResult.Fail(ex.InnerException is BlockedAddressException blocked ? blocked.Message : "The server could not be reached.", hostTrouble: ex.InnerException is not BlockedAddressException);
     }
     catch (IOException)
     {
-      return GuardedFetchResult.Fail("The connection failed.");
+      return GuardedFetchResult.Fail("The connection failed.", hostTrouble: true);
     }
   }
 

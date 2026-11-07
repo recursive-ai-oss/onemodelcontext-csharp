@@ -104,7 +104,8 @@ to an upstream OpenID Connect provider; the result is still your decision to app
   are cached per `Cache-Control` (default 5 minutes, at most an hour; `no-store` is honoured), failures for 30 seconds, at most 1000
   entries (at the limit, expired entries go first, then the one that expires soonest, so junk `client_id`s cannot switch caching off;
   a URL that can never be fetched takes no entry), at most 8 fetches in flight and 2 per host (`MaxFetchesPerHost`; more are refused
-  at once rather than queued). After a failed fetch a host is left alone for 10 seconds (`HostFailureBackoff`). **Rate-limit `/authorize`
+  at once rather than queued). After a fetch that timed out or could not connect, the host is left alone for 10 seconds
+  (`HostFailureBackoff`); an error status, a wrong content type or an oversized body only fails that URL (for 30 seconds), because a caller can choose such URLs on any host. **Rate-limit `/authorize`
   and `/token` in the host:** every request with a new metadata-document `client_id` can cost a fetch, and the limits above bound the
   damage, not the volume.
 - **Dynamic registration** is `[Obsolete]` since the 2026-07-28 revision and off by default. Turn it on only when clients you must
@@ -132,7 +133,8 @@ Access tokens live 10 minutes by default (`AccessTokenLifetime`) and carry `iss`
 
 **Revocation is honoured only by `CreateTokenValidator()`**, which asks the store. A plain `JwtTokenValidator` over the key set (the
 usual setup for a resource server in another process) accepts a revoked access token until its `exp`, which is why access tokens are
-short. Keep `AccessTokenLifetime` short, or run the resource server in the same process and use `CreateTokenValidator()`.
+short. A resource server that validates tokens from an external issuer should set `RequireAccessTokenType` on its `JwtTokenValidator` when
+that issuer emits `typ: at+jwt`, so that another JWT of the same issuer (an ID token) is not accepted as an access token. Keep `AccessTokenLifetime` short, or run the resource server in the same process and use `CreateTokenValidator()`.
 
 Signing keys come from you: `JsonWebSigningKey.FromRsa` (RS or PS algorithms, at least 2048 bits) or `FromECDsa` (P-256, P-384, P-521). The
 first key that is not retired signs. **Rotating:** put the new key first in `SigningKeys` and set `RetiredAt` on the old one (restart or
