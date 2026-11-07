@@ -33,5 +33,6 @@
     <Project Path="samples/Explorer/RecursiveAI.OneModelContext.Samples.Explorer.csproj" />
     <Project Path="samples/AspNetCoreServer/RecursiveAI.OneModelContext.Samples.AspNetCoreServer.csproj" />
     <Project Path="samples/QuickPath/RecursiveAI.OneModelContext.Samples.QuickPath.csproj" />
+    <Project Path="samples/AppsServer/RecursiveAI.OneModelContext.Samples.AppsServer.csproj" />
   </Folder>
 </Solution>

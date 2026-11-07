@@ -233,6 +233,13 @@ internal sealed class ClassEmitter
       hints.Add("Title = " + Lit(title));
     }
 
+    // MCP Apps: the tool names the ui:// resource that renders its results; the server opts in to the extension.
+    var uiResource = NamedString(attribute, "UiResource");
+    if (uiResource is not null)
+    {
+      _registrations.Append("    ").Append(Core).AppendLine(".Extensions.Apps.AppsServerExtensions.UseApps(server);");
+    }
+
     _registrations.Append("    server.Tools.Add(new ").Append(Core).Append(".ToolDefinition(").Append(Lit(name)).Append(", ").Append(description is null ? "null" : Lit(description))
       .Append(", ").Append(Core).Append(".Binding.ToolResults.Schema(").Append(Lit(root.ToJson())).Append("))");
     var initializers = new List<string>();
@@ -249,6 +256,12 @@ internal sealed class ClassEmitter
     if (outputSchema is not null)
     {
       initializers.Add("OutputSchema = " + Core + ".Binding.ToolResults.Schema(" + Lit(outputSchema.ToJson()) + ")");
+    }
+
+    if (uiResource is not null)
+    {
+      var visibility = NamedStrings(attribute, "UiVisibility");
+      initializers.Add("Meta = " + Core + ".Extensions.Apps.AppsExtension.ToolMeta(" + Lit(uiResource) + ", " + (visibility is null ? "null" : "new string[] { " + string.Join(", ", visibility.Select(Lit)) + " }") + ")");
     }
 
     if (initializers.Count > 0)
@@ -795,6 +808,19 @@ internal sealed class ClassEmitter
   }
 
   private static SyntaxNode? MethodSyntax(IMethodSymbol method) => method.DeclaringSyntaxReferences.Select(r => r.GetSyntax()).FirstOrDefault();
+
+  private static string[]? NamedStrings(AttributeData attribute, string name)
+  {
+    foreach (var named in attribute.NamedArguments)
+    {
+      if (named.Key == name && named.Value.Kind == TypedConstantKind.Array)
+      {
+        return named.Value.Values.Select(v => v.Value as string).Where(v => v is not null).Select(v => v!).ToArray();
+      }
+    }
+
+    return null;
+  }
 
   private static string? NamedString(AttributeData attribute, string name)
   {

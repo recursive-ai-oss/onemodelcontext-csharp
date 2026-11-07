@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using RecursiveAI.OneModelContext.Diagnostics;
+using RecursiveAI.OneModelContext.Extensions;
 using RecursiveAI.OneModelContext.JsonRpc;
 using RecursiveAI.OneModelContext.Protocol;
 using RecursiveAI.OneModelContext.Wire;
@@ -40,6 +41,12 @@ public sealed class ContextClientOptions
   /// <see cref="OnSample"/> or <see cref="OnListRoots"/> adds the matching capability, so it need not be listed here.
   /// </summary>
   public ClientCapabilities Capabilities { get; init; } = new();
+
+  /// <summary>
+  /// The extensions the client declares to servers: on 2026-07-28 in the <c>_meta</c> of every request, earlier in <c>initialize</c>. Default
+  /// none, so no extension is declared unless the host opts in (for example <c>AppsExtension.Client()</c>).
+  /// </summary>
+  public IReadOnlyList<ClientExtension> Extensions { get; init; } = [];
 
   /// <summary>The revisions the client speaks, newest first. Default <see cref="ProtocolVersions.Supported"/>.</summary>
   public IReadOnlyList<string> SupportedVersions { get; init; } = ProtocolVersions.Supported;
@@ -211,6 +218,14 @@ public sealed partial class ContextClient : IAsyncDisposable
       using var timeout = new CancellationTokenSource(options.ConnectTimeout, options.TimeProvider);
       using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
       var session = await NegotiateAsync(rpc, hello, options, options.ServerKey ?? transport.ServerKey, linked.Token).ConfigureAwait(false);
+      foreach (var extension in options.Extensions)
+      {
+        if (extension.Required && (session.ServerCapabilities.Extensions is not { } offered || !offered.ContainsKey(extension.Id)))
+        {
+          throw new ExtensionRequiredException(extension.Id);
+        }
+      }
+
       var client = new ContextClient(rpc, session, hello, options, CallbackRequestHandler.For(options), run) { _httpChannel = channel as Transports.HttpChannel };
       holder.Client = client;
       return client;
@@ -424,6 +439,59 @@ public sealed partial class ContextClient : IAsyncDisposable
   {
     ArgumentNullException.ThrowIfNull(request);
     return CallAsync<CompleteResult>(Methods.CompletionComplete, request, cancellationToken);
+  }
+
+  /// <summary>The extensions the server offers, by identifier, with their settings. Empty when it offers none. Read on connect, for either era.</summary>
+  public IReadOnlyDictionary<string, JsonElement> ServerExtensions =>
+    _session.ServerCapabilities.Extensions ?? (IReadOnlyDictionary<string, JsonElement>)EmptyExtensions;
+
+  private static readonly Dictionary<string, JsonElement> EmptyExtensions = [];
+
+  /// <summary>True when the server offers the extension.</summary>
+  /// <param name="extensionId">The extension identifier.</param>
+  public bool ServerSupportsExtension(string extensionId)
+  {
+    ArgumentNullException.ThrowIfNull(extensionId);
+    return ServerExtensions.ContainsKey(extensionId);
+  }
+
+  /// <summary>Calls a request an extension added to the protocol. Declare the extension in <see cref="ContextClientOptions.Extensions"/> first, or the server answers as if the method did not exist.</summary>
+  /// <param name="method">The extension's method, for example <c>tasks/get</c>.</param>
+  /// <param name="parameters">The params object, or <c>default</c> for none. Its <c>_meta</c>, if any, is kept.</param>
+  /// <param name="cancellationToken">Cancels the call; the server is told.</param>
+  /// <returns>The result object as received, with <c>resultType</c> and <c>_meta</c> as the server sent them.</returns>
+  /// <exception cref="ArgumentException"><paramref name="method"/> is a core method, or <paramref name="parameters"/> is not an object.</exception>
+  /// <exception cref="ProtocolException">The server rejected the call (method not found when it lacks the extension).</exception>
+  public async ValueTask<JsonElement> CallExtensionAsync(string method, JsonElement parameters = default, CancellationToken cancellationToken = default)
+  {
+    ArgumentException.ThrowIfNullOrEmpty(method);
+    if (parameters.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Object))
+    {
+      throw new ArgumentException("The params of a request are a JSON object.", nameof(parameters));
+    }
+
+    var typed = parameters.ValueKind == JsonValueKind.Object ? parameters.Deserialize(WireJsonContext.Default.RequestParams)! : new RequestParams();
+    var result = await CallAsync<ExtensionResult>(method, typed, cancellationToken).ConfigureAwait(false);
+    return JsonSerializer.SerializeToElement(result, WireJsonContext.Default.ExtensionResult);
+  }
+
+  /// <summary>Sends a notification an extension added to the protocol.</summary>
+  /// <param name="method">The extension's notification method.</param>
+  /// <param name="parameters">The params object, or <c>default</c> for none.</param>
+  /// <param name="cancellationToken">Cancels the send.</param>
+  public async ValueTask SendExtensionNotificationAsync(string method, JsonElement parameters = default, CancellationToken cancellationToken = default)
+  {
+    ArgumentException.ThrowIfNullOrEmpty(method);
+    if (parameters.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Object))
+    {
+      throw new ArgumentException("The params of a notification are a JSON object.", nameof(parameters));
+    }
+
+    var typed = parameters.ValueKind == JsonValueKind.Object ? parameters.Deserialize(WireJsonContext.Default.RequestParams)! : new RequestParams();
+
+    // On 2026-07-28 the notification names the extensions the client declares in its own _meta, since there is no session to hold them.
+    var encoded = _session.Codec.EncodeParams(_session, _hello, method, typed);
+    await _rpc.SendNotificationAsync(method, encoded, cancellationToken).ConfigureAwait(false);
   }
 
   /// <summary>Closes the connection.</summary>
@@ -689,7 +757,29 @@ public sealed partial class ContextClient : IAsyncDisposable
     }
 
     RouteToSubscriptions(notification);
+    RouteToExtensions(notification);
     NotificationReceived?.Invoke(notification);
+  }
+
+  // A notification an extension declared reaches that extension's handler; a handler that throws never ends the connection.
+  private void RouteToExtensions(JsonRpcNotification notification)
+  {
+    foreach (var extension in _options.Extensions)
+    {
+      if (extension.TryGetNotification(notification.Method, out var handler))
+      {
+        try
+        {
+          handler(notification.Params.ValueKind == JsonValueKind.Object ? notification.Params : ContextServer.EmptyObject);
+        }
+        catch (Exception ex)
+        {
+          ContextDiagnostics.Publish(DiagnosticKind.HandlerFault, "An extension notification handler threw " + ex.GetType().Name + ".", notification.Method, ex);
+        }
+
+        return;
+      }
+    }
   }
 
   // 2026-07-28 server/utilities/caching: fresh while now < received + ttlMs; a missing, zero or negative ttlMs means never reuse.

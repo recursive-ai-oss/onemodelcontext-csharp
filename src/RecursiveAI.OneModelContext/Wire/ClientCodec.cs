@@ -124,7 +124,7 @@ public static class ResultTypes
   /// <param name="method">The method.</param>
   /// <param name="result">The result value.</param>
   /// <returns>The record; a result with <c>resultType</c> <c>input_required</c> decodes as <see cref="InputRequiredResult"/> whatever the method.</returns>
-  /// <exception cref="ProtocolException">The method has no known result type, or the result does not match it (-32603 on this side).</exception>
+  /// <exception cref="ProtocolException">The result does not match its type (-32603 on this side).</exception>
   public static Result Decode(string method, JsonElement result)
   {
     ArgumentNullException.ThrowIfNull(method);
@@ -152,7 +152,8 @@ public static class ResultTypes
         Methods.PromptsGet => result.Deserialize(context.GetPromptResult),
         Methods.CompletionComplete => result.Deserialize(context.CompleteResult),
         Methods.SubscriptionsListen => result.Deserialize(context.SubscriptionsListenResult),
-        _ => throw new ProtocolException(JsonRpcErrorCodes.InternalError, "No result type is known for method '" + method + "'."),
+        // A method no core record knows is a request an extension added: its result keeps every member it has.
+        _ => result.Deserialize(context.ExtensionResult),
       };
 
       return decoded ?? throw new JsonException("null result");

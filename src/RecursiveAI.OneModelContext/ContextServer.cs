@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using RecursiveAI.OneModelContext.Diagnostics;
+using RecursiveAI.OneModelContext.Extensions;
 using RecursiveAI.OneModelContext.JsonRpc;
 using RecursiveAI.OneModelContext.Protocol;
 using RecursiveAI.OneModelContext.Wire;
@@ -138,6 +139,12 @@ public sealed partial class ContextServer : IServerHost
   /// <summary>The prompts. Add and remove while the server runs.</summary>
   public PromptRegistry Prompts { get; } = new();
 
+  /// <summary>
+  /// The extensions the server offers. Empty by default: nothing is advertised until a registration is added (for example
+  /// <c>server.Extensions.Add(...)</c> or <c>server.UseApps()</c>). See <see cref="ExtensionRegistration"/>.
+  /// </summary>
+  public ExtensionRegistry Extensions { get; } = new();
+
   /// <summary>Answers <c>completion/complete</c>. Setting it makes the server advertise the completions capability.</summary>
   public CompletionHandler? Completions { get; set; }
 
@@ -149,7 +156,11 @@ public sealed partial class ContextServer : IServerHost
     Resources = Resources.Count > 0 || ResourceTemplates.Count > 0 ? new ResourcesCapability { ListChanged = true } : null,
     Prompts = Prompts.Count > 0 ? new PromptsCapability { ListChanged = true } : null,
     Completions = Completions is null ? default : EmptyObject,
+    Extensions = Extensions.AdvertisedFor(null),
   };
+
+  /// <inheritdoc />
+  public Dictionary<string, JsonElement>? ExtensionsFor(string protocolVersion) => Extensions.AdvertisedFor(protocolVersion);
 
   /// <inheritdoc />
   public IReadOnlyList<string> SupportedVersions => Options.SupportedVersions;
@@ -161,7 +172,8 @@ public sealed partial class ContextServer : IServerHost
   public TimeSpan CacheTtl => Options.ListCacheTtl;
 
   /// <inheritdoc />
-  public string CacheScope => Options.ListCacheScope;
+  // A list that an extension reshapes per caller (Apps hides its metadata from callers without it) must not be shared between callers.
+  public string CacheScope => Extensions.HasToolAdapters ? "private" : Options.ListCacheScope;
 
   internal ServerEvents Events { get; } = new();
 
@@ -295,9 +307,55 @@ public sealed partial class ContextServer : IServerHost
   internal async ValueTask DispatchNotificationAsync(JsonRpcNotification notification, ServerSessionState session, CancellationToken cancellationToken)
   {
     var era = CodecSelector.Select(notification.Method, notification.Params, session, session.SessionId is not null);
+    if (Extensions.Count > 0 && Extensions.TryGetNotification(notification.Method, out var registration, out var extensionHandler))
+    {
+      await RunExtensionNotificationAsync(notification, session, era, registration, extensionHandler, cancellationToken).ConfigureAwait(false);
+      return;
+    }
+
     if (FindCodec(era) is { } codec)
     {
       await codec.HandleNotificationAsync(notification, session, this, cancellationToken).ConfigureAwait(false);
+    }
+  }
+
+  // An extension's notification is delivered only for a sender that declared the extension; anything else is dropped, as the spec asks
+  // of notifications nobody understands. A handler that throws is a diagnostic, never an error on the connection.
+  private static async ValueTask RunExtensionNotificationAsync(JsonRpcNotification notification, ServerSessionState session, ProtocolEra era, ExtensionRegistration registration, ExtensionNotificationHandler handler, CancellationToken cancellationToken)
+  {
+    PeerContext? peer = null;
+    try
+    {
+      if (era == ProtocolEra.Legacy)
+      {
+        if (session.NegotiatedVersion is { } negotiated)
+        {
+          peer = new PeerContext { Era = ProtocolEra.Legacy, ProtocolVersion = negotiated, ClientInfo = session.ClientInfo, ClientCapabilities = session.ClientCapabilities ?? new ClientCapabilities() };
+        }
+      }
+      else if (notification.Params.ValueKind == JsonValueKind.Object
+        && notification.Params.TryGetProperty("_meta", out var metaElement) && metaElement.ValueKind == JsonValueKind.Object
+        && metaElement.Deserialize(WireJsonContext.Default.MetaObject) is { ProtocolVersion: { } version } meta)
+      {
+        // 2026-07-28 carries the sender's capabilities in the notification's own _meta, as it does on requests.
+        peer = new PeerContext { Era = ProtocolEra.Modern, ProtocolVersion = version, ClientInfo = meta.ClientInfo, ClientCapabilities = meta.ClientCapabilities ?? new ClientCapabilities(), Meta = meta };
+      }
+
+      if (peer is null || !registration.SupportsRevision(peer.ProtocolVersion) || !ExtensionRegistry.Declares(peer.ClientCapabilities, registration.Id))
+      {
+        return;
+      }
+
+      var parameters = notification.Params.ValueKind == JsonValueKind.Object ? notification.Params : EmptyObject;
+      await handler(parameters, peer, cancellationToken).ConfigureAwait(false);
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+      throw;
+    }
+    catch (Exception ex)
+    {
+      ContextDiagnostics.Publish(DiagnosticKind.HandlerFault, "An extension notification handler threw " + ex.GetType().Name + ".", notification.Method, ex);
     }
   }
 
@@ -341,6 +399,15 @@ public sealed partial class ContextServer : IServerHost
       }
 
       peer = decision.Peer!;
+
+      // Extensions overview, "Graceful Degradation": a mandatory extension rejects a peer that lacks it. The codec chooses the code it can say.
+      if (Extensions.Count > 0 && Extensions.FirstMissingRequired(peer) is { } missing)
+      {
+        outcome = RequestOutcome.ProtocolError;
+        errorCode = ProtocolErrorCodes.MissingRequiredClientCapability;
+        var required = new ClientCapabilities { Extensions = new Dictionary<string, JsonElement> { [missing.Id] = EmptyObject } };
+        return codec.EncodeError(request.Id, peer, new MissingCapabilityException("The server requires the extension '" + missing.Id + "', which the client did not declare.", required));
+      }
 
       // 2026-07-28 mrtr: only these requests may be answered with input_required, and only they carry requestState we act on.
       var canAskForInput = request.Method is Methods.ToolsCall or Methods.PromptsGet or Methods.ResourcesRead;

@@ -139,7 +139,7 @@ internal sealed class ModernServerCodec : IServerCodec
       Resources = capabilities.Resources is { } resources ? new ResourcesCapability { Subscribe = resources.Subscribe ?? true, ListChanged = resources.ListChanged, AdditionalProperties = resources.AdditionalProperties } : null,
       Tools = capabilities.Tools,
       Tasks = capabilities.Tasks,
-      Extensions = capabilities.Extensions,
+      Extensions = host.ExtensionsFor(peer.ProtocolVersion),
       AdditionalProperties = capabilities.AdditionalProperties,
     };
 

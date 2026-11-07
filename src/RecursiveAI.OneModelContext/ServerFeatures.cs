@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using RecursiveAI.OneModelContext.Diagnostics;
+using RecursiveAI.OneModelContext.Extensions;
 using RecursiveAI.OneModelContext.JsonRpc;
 using RecursiveAI.OneModelContext.Protocol;
 
@@ -39,7 +40,7 @@ internal sealed class ServerFeatures(ContextServer server)
     switch (method)
     {
       case Methods.ToolsList:
-        return ListTools(Read(parameters, WireJsonContext.Default.PaginatedRequestParams));
+        return ListTools(Read(parameters, WireJsonContext.Default.PaginatedRequestParams), context);
       case Methods.ToolsCall:
         return await CallToolAsync(Read(parameters, WireJsonContext.Default.CallToolRequestParams), context).ConfigureAwait(false);
       case Methods.ResourcesList:
@@ -57,7 +58,37 @@ internal sealed class ServerFeatures(ContextServer server)
       case Methods.CompletionComplete when server.Completions is { } complete:
         return await complete(Read(parameters, WireJsonContext.Default.CompleteRequestParams), context).ConfigureAwait(false);
       default:
+        if (server.Extensions.Count > 0 && server.Extensions.TryGetRequest(method, out var registration, out var extensionHandler))
+        {
+          return await RunExtensionAsync(method, parameters, context, registration, extensionHandler).ConfigureAwait(false);
+        }
+
         throw new ProtocolException(JsonRpcErrorCodes.MethodNotFound, "Method not found: " + method + ".");
+    }
+  }
+
+  // Extensions overview, "Graceful Degradation": a peer that did not declare the extension gets core behaviour, which has no such method.
+  // (A mandatory extension was already enforced before dispatch.)
+  private static async ValueTask<Result> RunExtensionAsync(string method, JsonElement parameters, RequestContext context, ExtensionRegistration registration, ExtensionRequestHandler handler)
+  {
+    if (!context.SupportsExtension(registration.Id))
+    {
+      throw new ProtocolException(JsonRpcErrorCodes.MethodNotFound, "Method not found: " + method + ".");
+    }
+
+    var answer = await handler(parameters.ValueKind == JsonValueKind.Object ? parameters : ContextServer.EmptyObject, context).ConfigureAwait(false);
+    if (answer.ValueKind != JsonValueKind.Object)
+    {
+      throw new ProtocolException(JsonRpcErrorCodes.InternalError, "Internal error.");
+    }
+
+    try
+    {
+      return answer.Deserialize(WireJsonContext.Default.ExtensionResult) ?? throw new ProtocolException(JsonRpcErrorCodes.InternalError, "Internal error.");
+    }
+    catch (JsonException)
+    {
+      throw new ProtocolException(JsonRpcErrorCodes.InternalError, "Internal error.");
     }
   }
 
@@ -141,16 +172,26 @@ internal sealed class ServerFeatures(ContextServer server)
     }
   }
 
-  private ListToolsResult ListTools(PaginatedRequestParams request)
+  private ListToolsResult ListTools(PaginatedRequestParams request, RequestContext context)
   {
     var page = Page(server.Tools.Snapshot(), static e => e.Definition.Name, request.Cursor, out var next);
     var tools = new List<Tool>(page.Length);
+    var adapt = server.Extensions.HasToolAdapters;
     foreach (var entry in page)
     {
-      tools.Add(entry.Definition.ToTool());
+      var tool = entry.Definition.ToTool();
+      if (adapt)
+      {
+        tool = server.Extensions.AdaptTool(tool, context);
+      }
+
+      if (tool is not null)
+      {
+        tools.Add(tool);
+      }
     }
 
-    return new ListToolsResult { Tools = tools, NextCursor = next, ResultType = WireNames.ResultTypeComplete, TtlMs = TtlMs, CacheScope = server.Options.ListCacheScope };
+    return new ListToolsResult { Tools = tools, NextCursor = next, ResultType = WireNames.ResultTypeComplete, TtlMs = TtlMs, CacheScope = server.CacheScope };
   }
 
   private ListResourcesResult ListResources(PaginatedRequestParams request)
@@ -230,9 +271,11 @@ internal sealed class ServerFeatures(ContextServer server)
 
   private async ValueTask<CallToolResult> CallToolAsync(CallToolRequestParams request, RequestContext context)
   {
-    if (!server.Tools.TryGet(request.Name, out _, out var handler))
+    if (!server.Tools.TryGet(request.Name, out var definition, out var handler)
+      || (server.Extensions.HasToolAdapters && server.Extensions.AdaptTool(definition.ToTool(), context) is null))
     {
-      // The seed treats an unknown tool as invalid params, as the spec's error handling for tools/call does.
+      // The seed treats an unknown tool as invalid params, as the spec's error handling for tools/call does. A tool an extension hides
+      // from this caller (an app-only tool, for a caller without Apps) is as unknown to it as it is in the list.
       throw new ProtocolException(JsonRpcErrorCodes.InvalidParams, "Unknown tool: " + request.Name + ".");
     }
 

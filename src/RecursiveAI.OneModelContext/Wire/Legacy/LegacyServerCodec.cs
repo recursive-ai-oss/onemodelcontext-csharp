@@ -179,7 +179,7 @@ internal sealed class LegacyServerCodec : IServerCodec
           : new ResourcesCapability { Subscribe = true, ListChanged = advertised.Resources.ListChanged },
         Tools = advertised.Tools,
         Tasks = advertised.Tasks,
-        Extensions = advertised.Extensions,
+        Extensions = host.ExtensionsFor(chosen),
       },
       ServerInfo = host.Info,
       Instructions = host.Instructions,
