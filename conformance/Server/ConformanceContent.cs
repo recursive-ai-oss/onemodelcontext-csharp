@@ -1,5 +1,6 @@
 using System.Text.Json;
 using RecursiveAI.OneModelContext;
+using RecursiveAI.OneModelContext.Extensions.Tasks;
 using RecursiveAI.OneModelContext.Protocol;
 
 namespace RecursiveAI.OneModelContext.ConformanceServer;
@@ -24,6 +25,7 @@ internal static class ConformanceContent
     AddPrompts(server);
     AddModernDiagnostics(server);
     AddInputRequired(server);
+    AddTasks(server);
     // Suggests values that start with what was typed, from a fixed list.
     server.Completions = (request, _) =>
     {
@@ -299,6 +301,68 @@ internal static class ConformanceContent
       {
         var answer = await ctx.ElicitAsync("What is your name?", NameForm);
         return new GetPromptResult { Messages = [new PromptMessage { Role = "user", Content = TextContent.Of("Hello, action=" + answer.Action) }] };
+      });
+  }
+
+  // The Tasks extension scenarios name their fixtures: a sync tool, task tools that sleep, fail, ask for input, and one that gathers input
+  // before it becomes a task.
+  private static void AddTasks(ContextServer server)
+  {
+    server.UseTasks();
+    var secondsSchema = Parse("""{"type":"object","properties":{"seconds":{"type":"number"}}}""");
+
+    server.Tools.Add(
+      new ToolDefinition("greet", "Greets by name.", Parse("""{"type":"object","properties":{"name":{"type":"string"}}}""")),
+      (arguments, _) => Text("Hello, " + (arguments.ValueKind == JsonValueKind.Object && arguments.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : "world") + "!"));
+
+    server.AddTaskTool(new ToolDefinition("slow_compute", "Sleeps, then answers.", secondsSchema), async (arguments, task) =>
+    {
+      var seconds = arguments.ValueKind == JsonValueKind.Object && arguments.TryGetProperty("seconds", out var s) && s.ValueKind == JsonValueKind.Number ? s.GetDouble() : 1;
+      await Task.Delay(TimeSpan.FromSeconds(Math.Clamp(seconds, 0, 120)), task.CancellationToken);
+      return CallToolResult.FromText("Computed after " + seconds.ToString(System.Globalization.CultureInfo.InvariantCulture) + " seconds.");
+    });
+
+    // A tool that ran and reported an error: the task is completed with isError, not failed.
+    server.AddTaskTool(new ToolDefinition("failing_job", "Always reports a tool error.", NoArguments), async (_, task) =>
+    {
+      await Task.Delay(TimeSpan.FromSeconds(1), task.CancellationToken);
+      return CallToolResult.FromError("The job failed.");
+    }, new TaskToolOptions { RequireTasks = true });
+
+    server.AddTaskTool(new ToolDefinition("protocol_error_job", "Fails with a protocol error.", NoArguments), (_, _) =>
+      throw new ProtocolException(-32603, "The job crashed."));
+
+    server.AddTaskTool(new ToolDefinition("confirm_delete", "Asks before deleting.", NoArguments), async (_, task) =>
+    {
+      var answer = await task.ElicitAsync("confirm", "Delete everything?", Parse("""{"type":"object","properties":{"confirm":{"type":"boolean"}}}"""));
+      return CallToolResult.FromText("Delete: " + answer.Action);
+    });
+
+    server.AddTaskTool(new ToolDefinition("multi_input", "Asks two questions at once.", NoArguments), async (_, task) =>
+    {
+      var first = task.ElicitAsync("first", "First?", NameForm).AsTask();
+      var second = task.ElicitAsync("second", "Second?", NameForm).AsTask();
+      var answers = await Task.WhenAll(first, second);
+      return CallToolResult.FromText("Answered: " + answers[0].Action + ", " + answers[1].Action);
+    });
+
+    // Input is gathered with the ordinary retry exchange; the task is created on the final round and its result reflects the answer.
+    server.AddTaskTool(
+      new ToolDefinition("test_tool_with_task", "Gathers a name, then works in the background.", NoArguments),
+      (arguments, _) =>
+      {
+        var name = arguments.TryGetProperty("user_name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : "";
+        return ValueTask.FromResult(CallToolResult.FromText("Hello, " + name + "!"));
+      },
+      new TaskToolOptions
+      {
+        RequireTasks = true,
+        Prepare = async (arguments, ctx) =>
+        {
+          var answer = await ctx.ElicitAsync("What is your name?", NameForm, "user_name");
+          var name = answer.Content is { } values && values.TryGetValue("name", out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : "";
+          return Parse(JsonSerializer.Serialize(new Dictionary<string, string> { ["user_name"] = name ?? "" }, ConformanceJson.Default.DictionaryStringString));
+        },
       });
   }
 

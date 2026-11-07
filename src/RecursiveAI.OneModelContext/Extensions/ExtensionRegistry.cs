@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading.Tasks;
 using RecursiveAI.OneModelContext.Protocol;
 using RecursiveAI.OneModelContext.Wire;
 
@@ -104,6 +105,36 @@ public sealed class ExtensionRegistry
       foreach (var entry in _entries)
       {
         if (entry.ToolAdapter is not null)
+        {
+          return true;
+        }
+      }
+
+      return false;
+    }
+  }
+
+  /// <summary>Runs the extensions' tool call interceptors in registration order; the first to return a result wins.</summary>
+  internal async ValueTask<Result?> InterceptToolCallAsync(string toolName, JsonElement arguments, ToolHandler tool, RequestContext context)
+  {
+    foreach (var entry in _entries)
+    {
+      if (entry.ToolCallInterceptor is { } interceptor && await interceptor(toolName, arguments, tool, context).ConfigureAwait(false) is { } result)
+      {
+        return result;
+      }
+    }
+
+    return null;
+  }
+
+  internal bool HasToolCallInterceptors
+  {
+    get
+    {
+      foreach (var entry in _entries)
+      {
+        if (entry.ToolCallInterceptor is not null)
         {
           return true;
         }

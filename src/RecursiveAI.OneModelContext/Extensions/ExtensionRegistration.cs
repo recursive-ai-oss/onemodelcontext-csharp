@@ -30,6 +30,17 @@ public delegate ValueTask ExtensionNotificationHandler(JsonElement parameters, P
 public delegate Tool? ToolAdapter(Tool tool, RequestContext context);
 
 /// <summary>
+/// Takes over a <c>tools/call</c> for an extension, for example to answer with a task handle instead of the tool's result. It runs after the
+/// tool is known and visible to the caller and before the tool does.
+/// </summary>
+/// <param name="toolName">The tool being called.</param>
+/// <param name="arguments">Its arguments (an empty object when there were none).</param>
+/// <param name="tool">The tool's own handler, for the interceptor to run now or later.</param>
+/// <param name="context">The request.</param>
+/// <returns>The result to send instead of running the tool, or <c>null</c> to let the call go on as usual.</returns>
+public delegate ValueTask<Result?> ToolCallInterceptor(string toolName, JsonElement arguments, ToolHandler tool, RequestContext context);
+
+/// <summary>
 /// An extension a server offers: its identifier, settings, the core revisions it works on, the requests and notifications it adds, and the
 /// <c>_meta</c> keys it uses. Extensions are off by default: a server advertises one only when its registration is added to
 /// <see cref="ContextServer.Extensions"/>.
@@ -127,6 +138,16 @@ public sealed class ExtensionRegistration
 
   /// <summary>Reshapes tool listings per caller (the way Apps hides its metadata from hosts that do not render it). Default none.</summary>
   public ToolAdapter? ToolAdapter { get; init; }
+
+  /// <summary>Takes over tool calls (see <see cref="ToolCallInterceptor"/>). Default none.</summary>
+  public ToolCallInterceptor? ToolCallInterceptor { get; init; }
+
+  /// <summary>
+  /// When true, one of the extension's own requests from a peer on a revision the extension works on, which did not declare it, is refused
+  /// with -32021 (<c>MissingRequiredClientCapability</c>) naming the extension, instead of being treated as an unknown method. Core requests
+  /// are unaffected. Default <c>false</c>.
+  /// </summary>
+  public bool UndeclaredRequestsFail { get; init; }
 
   /// <summary>The requests the extension adds.</summary>
   public IReadOnlyCollection<string> RequestMethods => _requests.Keys;

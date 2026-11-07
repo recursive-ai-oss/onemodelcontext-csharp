@@ -225,6 +225,7 @@ internal sealed class HttpChannel : IJsonRpcChannel
           {
             Methods.ToolsCall or Methods.PromptsGet => StringMember(parameters, "name"),
             Methods.ResourcesRead => StringMember(parameters, "uri"),
+            _ when shape.Method is { } taskMethod && Extensions.Tasks.TasksExtension.IsTaskMethod(taskMethod) => StringMember(parameters, "taskId"),
             _ => null,
           };
 

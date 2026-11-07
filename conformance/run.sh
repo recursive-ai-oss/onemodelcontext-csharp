@@ -60,6 +60,8 @@ case "$cmd" in
     name="$cmd-${selector[1]:-all}"
     version=()
     [ -n "${SPEC_VERSION:-}" ] && version=(--spec-version "$SPEC_VERSION")
+    # Extension scenarios are not on the spec timeline, so the suite runs them only when forced.
+    [ -n "${CONFORMANCE_FORCE:-}" ] && version+=(--force)
     suite "$cmd" "$flag" "$target" "${selector[@]}" "${version[@]}" 2>&1 | tee "$out/${name//\//_}.log"
     ;;
   regression)
@@ -76,16 +78,16 @@ case "$cmd" in
     [ -n "$out" ] || die "need --out"
     mkdir -p "$out"
     failed=0; ran=0
-    # Each line: side scenario revision. Blank lines and # comments are ignored.
+    # Each line: side scenario revision. Blank lines and # comments are ignored. The revision "extension" means an extension scenario.
     while read -r side scenario revision; do
       case "${side:-}" in ''|'#'*) continue ;; esac
       [ -z "$only" ] || [ "$only" = "$side" ] || continue
       ran=$((ran + 1))
       if [ "$side" = server ]; then
         # The revision column picks the scenario's variant for that revision (--spec-version).
-        SPEC_VERSION="${revision:-}" "$HERE/run.sh" server --url "${url:?--url is needed for server scenarios}" --out "$out" --scenario "$scenario" || failed=$((failed + 1))
+        CONFORMANCE_FORCE="$([ "${revision:-}" = extension ] && echo 1)" SPEC_VERSION="$([ "${revision:-}" = extension ] || echo "${revision:-}")" "$HERE/run.sh" server --url "${url:?--url is needed for server scenarios}" --out "$out" --scenario "$scenario" || failed=$((failed + 1))
       else
-        SPEC_VERSION="${revision:-}" "$HERE/run.sh" client --command "${command:?--command is needed for client scenarios}" --out "$out" --scenario "$scenario" || failed=$((failed + 1))
+        CONFORMANCE_FORCE="$([ "${revision:-}" = extension ] && echo 1)" SPEC_VERSION="$([ "${revision:-}" = extension ] || echo "${revision:-}")" "$HERE/run.sh" client --command "${command:?--command is needed for client scenarios}" --out "$out" --scenario "$scenario" || failed=$((failed + 1))
       fi
     done < "$HERE/scenarios.txt"
     echo "regression: $ran scenario(s) run, $failed failed"

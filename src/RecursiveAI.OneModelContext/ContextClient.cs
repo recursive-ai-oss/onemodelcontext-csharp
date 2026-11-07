@@ -370,10 +370,24 @@ public sealed partial class ContextClient : IAsyncDisposable
 
   private async ValueTask<CallToolResult> CallToolCoreAsync(string name, JsonElement arguments, IProgress<ProgressNotificationParams>? progress, CancellationToken cancellationToken)
   {
+    var result = await CallToolRawAsync(name, arguments, progress, cancellationToken).ConfigureAwait(false);
+    if (result is CallToolResult tool)
+    {
+      return tool;
+    }
+
+    // The server answered with a task handle (the client declared the Tasks extension): follow it to the end, so a caller that does not
+    // care about tasks still gets the tool's result.
+    return await Extensions.Tasks.TasksClientExtensions.CompleteAsync(this, result, cancellationToken).ConfigureAwait(false);
+  }
+
+  /// <summary>Calls a tool and returns whatever the server answered: the tool's result, or a task handle for a client that declared the Tasks extension.</summary>
+  internal async ValueTask<Result> CallToolRawAsync(string name, JsonElement arguments, IProgress<ProgressNotificationParams>? progress, CancellationToken cancellationToken)
+  {
     var request = new CallToolRequestParams { Name = name, Arguments = arguments };
     try
     {
-      return await CallAsync<CallToolResult>(Methods.ToolsCall, request, cancellationToken, progress).ConfigureAwait(false);
+      return await CallAsync<Result>(Methods.ToolsCall, request, cancellationToken, progress).ConfigureAwait(false);
     }
     catch (HeaderMismatchException) when (_httpChannel is not null && Era == ProtocolEra.Modern)
     {
@@ -381,8 +395,30 @@ public sealed partial class ContextClient : IAsyncDisposable
       // list the tools again to learn the headers, then retry the call once.
       InvalidateCache();
       await ListToolsAsync(cancellationToken).ConfigureAwait(false);
-      return await CallAsync<CallToolResult>(Methods.ToolsCall, request, cancellationToken, progress).ConfigureAwait(false);
+      return await CallAsync<Result>(Methods.ToolsCall, request, cancellationToken, progress).ConfigureAwait(false);
     }
+  }
+
+  /// <summary>The clock the client waits with.</summary>
+  internal TimeProvider Clock => _options.TimeProvider;
+
+  /// <summary>Answers one server-to-client request the way the client answers input requests of any other call.</summary>
+  internal async ValueTask<JsonElement> AnswerInputRequestAsync(InputRequest request, CancellationToken cancellationToken)
+  {
+    if (request.Method is not (Methods.ElicitationCreate or Methods.SamplingCreateMessage or Methods.RootsList))
+    {
+      throw new ProtocolException(JsonRpcErrorCodes.InternalError, "The server asked for input with the unknown method '" + request.Method + "'.");
+    }
+
+    if (_handler is not { } handler)
+    {
+      throw new ContextException("The server asked the client for input (" + request.Method + ") and the client has no handler for it (set OnElicit, OnConfirm, OnSample, OnListRoots or RequestHandler).");
+    }
+
+    var answer = await handler.HandleAsync(request.Method, request.Params, cancellationToken).ConfigureAwait(false);
+    var info = WireJsonContext.Default.GetTypeInfo(answer.GetType())
+      ?? throw new InvalidOperationException("The handler returned a result type that is not a protocol record.");
+    return JsonSerializer.SerializeToElement(answer, info);
   }
 
   // 2026-07-28 transports, "Custom Headers from Tool Parameters": over HTTP a tool whose x-mcp-header annotations break the rules is

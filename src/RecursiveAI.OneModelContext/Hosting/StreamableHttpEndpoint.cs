@@ -841,6 +841,8 @@ public sealed class StreamableHttpEndpoint : IDisposable
     {
       Methods.ToolsCall or Methods.PromptsGet => "name",
       Methods.ResourcesRead => "uri",
+      // Tasks extension, "Streamable HTTP: Routing Headers": Mcp-Name carries params.taskId.
+      _ when Extensions.Tasks.TasksExtension.IsTaskMethod(rpcRequest.Method) => "taskId",
       _ => null,
     };
 
