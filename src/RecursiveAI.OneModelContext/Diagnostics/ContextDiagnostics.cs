@@ -63,6 +63,9 @@ public enum DiagnosticKind
   /// <summary>The audit callback threw.</summary>
   AuditFault,
 
+  /// <summary>A bearer token was refused or could not be checked. The message never contains the token.</summary>
+  AuthRejected,
+
   /// <summary>An informational note from a protocol layer.</summary>
   Note,
 }
