@@ -6,7 +6,9 @@ using System.Text.Json;
 using AspNetCoreServer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using RecursiveAI.OneModelContext.AspNetCore;
+using RecursiveAI.OneModelContext.Extensions.ServerCards;
 using RecursiveAI.OneModelContext.Protocol;
 using Xunit;
 
@@ -227,5 +229,45 @@ public sealed class EndpointTests : IAsyncDisposable
     // Hanging up cancels the request's token.
     response.Dispose();
     await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(20), Ct);
+  }
+
+  [Fact]
+  public async Task A_published_server_card_is_served_beside_the_endpoint_to_anyone()
+  {
+    var server = new ContextServer("weather", "2.1.0");
+    server.UseServerCard(server.CreateServerCard("com.example/weather", "Forecasts for any city.", "https://example.com/mcp"));
+    var builder = WebApplication.CreateSlimBuilder(["--urls", "http://127.0.0.1:0"]);
+    builder.Services.AddAuthentication().AddCookie();
+    builder.Services.AddAuthorization();
+    var app = builder.Build();
+    _apps.Add(app);
+    app.UseAuthentication();
+    app.UseAuthorization();
+
+    // The endpoint demands a login; the card must still be readable without one.
+    app.MapModelContext("/mcp", server).RequireAuthorization();
+    await app.StartAsync(Ct);
+    var baseUrl = app.Urls.First();
+
+    using var request = new HttpRequestMessage(HttpMethod.Get, baseUrl + "/mcp/server-card");
+    request.Headers.TryAddWithoutValidation("Origin", "https://app.example");
+    request.Headers.TryAddWithoutValidation("Accept", "application/mcp-server-card+json");
+    using var response = await SendAsync(request);
+
+    Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    Assert.Equal("application/mcp-server-card+json", response.Content.Headers.ContentType?.MediaType);
+    Assert.Equal("*", response.Headers.GetValues("Access-Control-Allow-Origin").Single());
+    Assert.Equal("public, max-age=3600", response.Headers.CacheControl?.ToString());
+    using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(Ct));
+    Assert.Equal("com.example/weather", body.RootElement.GetProperty("name").GetString());
+
+    using var conditional = new HttpRequestMessage(HttpMethod.Get, baseUrl + "/mcp/server-card");
+    conditional.Headers.TryAddWithoutValidation("If-None-Match", response.Headers.ETag!.ToString());
+    Assert.Equal(HttpStatusCode.NotModified, (await SendAsync(conditional)).StatusCode);
+
+    // The MCP endpoint itself is still protected.
+    using var protectedCall = new HttpRequestMessage(HttpMethod.Post, baseUrl + "/mcp") { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
+    using var noRedirects = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
+    Assert.Equal(HttpStatusCode.Redirect, (await noRedirects.SendAsync(protectedCall, Ct)).StatusCode);
   }
 }

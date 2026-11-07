@@ -1,5 +1,6 @@
 using System.Text.Json;
 using RecursiveAI.OneModelContext;
+using RecursiveAI.OneModelContext.Extensions.ServerCards;
 using RecursiveAI.OneModelContext.Extensions.Skills;
 using RecursiveAI.OneModelContext.Extensions.Tasks;
 using RecursiveAI.OneModelContext.Protocol;
@@ -28,6 +29,7 @@ internal static class ConformanceContent
     AddInputRequired(server);
     AddTasks(server);
     AddSkills(server);
+    server.UseServerCard(server.CreateServerCard("io.example/conformance", "A server for the protocol's conformance suite.", "http://127.0.0.1/mcp"));
     // Suggests values that start with what was typed, from a fixed list.
     server.Completions = (request, _) =>
     {

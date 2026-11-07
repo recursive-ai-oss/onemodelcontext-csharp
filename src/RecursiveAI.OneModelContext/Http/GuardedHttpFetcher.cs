@@ -33,8 +33,19 @@ public sealed class GuardedFetchResult
   /// <summary>Why the fetch failed, in words safe to log (never the body); null on success.</summary>
   public string? Failure { get; private init; }
 
-  internal static GuardedFetchResult Ok(byte[] body, string? contentType, TimeSpan? lifetime) =>
-    new() { Succeeded = true, Body = body, ContentType = contentType, CacheLifetime = lifetime };
+  /// <summary>The response's <c>ETag</c> validator, or null.</summary>
+  public string? ETag { get; private init; }
+
+  /// <summary>
+  /// True when the request was conditional (<c>If-None-Match</c>) and the server answered 304: the copy the caller holds is current.
+  /// <see cref="Succeeded"/> is false then and <see cref="Failure"/> is null.
+  /// </summary>
+  public bool NotModified { get; private init; }
+
+  internal static GuardedFetchResult Ok(byte[] body, string? contentType, TimeSpan? lifetime, string? eTag = null) =>
+    new() { Succeeded = true, Body = body, ContentType = contentType, CacheLifetime = lifetime, ETag = eTag };
+
+  internal static GuardedFetchResult Unchanged(string? eTag, TimeSpan? lifetime) => new() { NotModified = true, ETag = eTag, CacheLifetime = lifetime };
 
   internal static GuardedFetchResult Fail(string reason) => new() { Failure = reason };
 }
@@ -125,9 +136,22 @@ public sealed class GuardedHttpFetcher : IDisposable
   /// <param name="uri">The URL.</param>
   /// <param name="cancellationToken">Cancels the fetch.</param>
   /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
-  public async Task<GuardedFetchResult> GetAsync(Uri uri, CancellationToken cancellationToken = default)
+  public Task<GuardedFetchResult> GetAsync(Uri uri, CancellationToken cancellationToken = default) =>
+    GetAsync(uri, "application/json", null, cancellationToken);
+
+  /// <summary>
+  /// Fetches a URL with GET, asking for a given media type and, when the caller holds an earlier copy, for it only if it changed.
+  /// Everything else is as in <see cref="GetAsync(Uri, CancellationToken)"/>.
+  /// </summary>
+  /// <param name="uri">The URL.</param>
+  /// <param name="accept">The <c>Accept</c> header value.</param>
+  /// <param name="ifNoneMatch">The <c>ETag</c> of the copy the caller holds, sent as <c>If-None-Match</c>; <c>null</c> for an unconditional request. A 304 answer is a <see cref="GuardedFetchResult.NotModified"/> result.</param>
+  /// <param name="cancellationToken">Cancels the fetch.</param>
+  /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+  public async Task<GuardedFetchResult> GetAsync(Uri uri, string accept, string? ifNoneMatch, CancellationToken cancellationToken = default)
   {
     ArgumentNullException.ThrowIfNull(uri);
+    ArgumentException.ThrowIfNullOrEmpty(accept);
     if (!IsAcceptableUrl(uri))
     {
       return GuardedFetchResult.Fail("The URL is not an https URL without credentials or fragment.");
@@ -138,8 +162,18 @@ public sealed class GuardedHttpFetcher : IDisposable
     try
     {
       using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-      request.Headers.Accept.ParseAdd("application/json");
+      request.Headers.Accept.ParseAdd(accept);
+      if (ifNoneMatch is not null)
+      {
+        request.Headers.TryAddWithoutValidation("If-None-Match", ifNoneMatch);
+      }
+
       using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, linked.Token).ConfigureAwait(false);
+
+      if (response.StatusCode == HttpStatusCode.NotModified && ifNoneMatch is not null)
+      {
+        return GuardedFetchResult.Unchanged(response.Headers.ETag?.ToString() ?? ifNoneMatch, ParseLifetime(response));
+      }
 
       // Draft CIMD section 4: only 200 counts, and a redirect is never followed.
       if (response.StatusCode != HttpStatusCode.OK)
@@ -160,7 +194,7 @@ public sealed class GuardedHttpFetcher : IDisposable
       }
 
       var media = response.Content.Headers.ContentType?.MediaType?.ToLowerInvariant();
-      return GuardedFetchResult.Ok(body, media, ParseLifetime(response));
+      return GuardedFetchResult.Ok(body, media, ParseLifetime(response), response.Headers.ETag?.ToString());
     }
     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
     {

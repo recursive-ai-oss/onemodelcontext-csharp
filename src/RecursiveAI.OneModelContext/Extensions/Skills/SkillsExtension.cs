@@ -50,8 +50,9 @@ public static class SkillsExtension
   public const int MaxDescriptionLength = 1024;
 
   /// <summary>
-  /// What a client adds to <see cref="ContextClientOptions.Extensions"/> to use skills. A server answers <c>skills/list</c>, <c>skills/get</c>
-  /// and <c>resources/directory/read</c> only to a client that did.
+  /// What a client may add to <see cref="ContextClientOptions.Extensions"/> to say it understands skills. The extension does not need it: a
+  /// client finds out from the server's declaration, and servers here answer <c>skills/list</c>, <c>skills/get</c> and
+  /// <c>resources/directory/read</c> for every caller on 2026-07-28.
   /// </summary>
   /// <returns>The declaration; the extension has no client settings.</returns>
   public static ClientExtension Client() => new(Id, default, official: true);
@@ -89,7 +90,7 @@ public static class SkillsServerExtensions
 
   /// <summary>
   /// Opts the server in to the Skills extension: it advertises <see cref="SkillsExtension.Id"/> on 2026-07-28 and answers the three requests
-  /// to clients that declared it. Earlier revisions see the skill files as plain resources. The server must publish at least one skill
+  /// to every caller. Earlier revisions see the skill files as plain resources. The server must publish at least one skill
   /// (<see cref="AddSkill"/>) so that it has the <c>resources</c> capability the extension depends on.
   /// </summary>
   /// <param name="server">The server.</param>
@@ -166,7 +167,12 @@ internal sealed class SkillsService
       SkillsJsonContext.Default.DictionaryStringBoolean);
 
     // Specified against 2026-07-28 only (Skills extension, "Protocol Revision").
+    // The client learns of the extension from the server's declaration and sends no declaration of its own (the specification's examples
+    // carry empty client capabilities), so the requests are answered for every caller on 2026-07-28.
     var registration = new ExtensionRegistration(SkillsExtension.Id, settings, [ProtocolVersions.V20260728], official: true)
+    {
+      AnswersUndeclaredPeers = true,
+    }
       .Request(SkillsExtension.ListMethod, ListAsync)
       .Request(SkillsExtension.GetMethod, GetAsync);
     if (_options.DirectoryRead)

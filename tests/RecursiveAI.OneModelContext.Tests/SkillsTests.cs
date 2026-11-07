@@ -85,13 +85,13 @@ public class SkillsTests
   }
 
   [Fact]
-  public async Task A_client_that_did_not_declare_the_extension_sees_plain_resources_and_unknown_methods()
+  public async Task A_client_that_did_not_declare_the_extension_can_still_use_what_the_server_offers()
   {
     var (client, stop) = await ConnectAsync(NewServer(), EraPreference.Modern, ProtocolVersions.V20260728, declare: false);
+    Assert.True(client.ServerSupportsExtension(SkillsExtension.Id));
+    Assert.Equal(2, (await client.ListSkillsAsync(Ct)).Count);
     var read = await client.ReadResourceAsync("skill://pdf-processing/SKILL.md", Ct);
     Assert.Contains("PDF processing", ((TextResourceContents)read.Contents[0]).Text, StringComparison.Ordinal);
-    var error = await Assert.ThrowsAsync<ProtocolException>(async () => await client.CallExtensionAsync(SkillsExtension.ListMethod, default, Ct));
-    Assert.Equal(JsonRpcErrorCodes.MethodNotFound, error.Code);
     await stop();
   }
 

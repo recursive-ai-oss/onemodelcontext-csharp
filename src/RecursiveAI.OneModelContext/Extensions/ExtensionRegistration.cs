@@ -149,6 +149,12 @@ public sealed class ExtensionRegistration
   /// </summary>
   public bool UndeclaredRequestsFail { get; init; }
 
+  /// <summary>
+  /// When true, the extension's requests are answered for any peer on a revision the extension works on, declared or not. For extensions
+  /// whose specification has the client find the extension in the server's declaration alone (Skills). Default <c>false</c>.
+  /// </summary>
+  internal bool AnswersUndeclaredPeers { get; init; }
+
   /// <summary>The requests the extension adds.</summary>
   public IReadOnlyCollection<string> RequestMethods => _requests.Keys;
 

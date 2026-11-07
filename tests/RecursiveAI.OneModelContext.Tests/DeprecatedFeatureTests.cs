@@ -50,4 +50,16 @@ public class DeprecatedFeatureTests
   {
     Assert.Empty(Compile("await ctx.ReportProgressAsync(1); await ctx.ConfirmAsync(\"ok?\"); await client.ListToolsAsync(); await using var c = await ModelContext.ConnectAsync(\"x\", onConfirm: (m, t) => ValueTask.FromResult(true));"));
   }
+
+  [Theory]
+  [InlineData("var s = new RecursiveAI.OneModelContext.Extensions.Tasks.MemoryTaskStore();", "OMCX0001")]
+  [InlineData("var d = RecursiveAI.OneModelContext.Extensions.Skills.SkillDefinition.IsValidName(\"x\");", "OMCX0002")]
+  [InlineData("var c = new RecursiveAI.OneModelContext.Extensions.ServerCards.ServerCardClient();", "OMCX0003")]
+  public void Using_an_experimental_extension_is_an_error_until_the_project_opts_in(string body, string id)
+  {
+    var diagnostic = Assert.Single(Compile(body), d => d.Id == id);
+
+    Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
+    Assert.Contains("evaluation purposes", diagnostic.GetMessage(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+  }
 }

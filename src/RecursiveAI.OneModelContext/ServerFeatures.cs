@@ -71,7 +71,7 @@ internal sealed class ServerFeatures(ContextServer server)
   // (A mandatory extension was already enforced before dispatch.)
   private static async ValueTask<Result> RunExtensionAsync(string method, JsonElement parameters, RequestContext context, ExtensionRegistration registration, ExtensionRequestHandler handler)
   {
-    if (!context.SupportsExtension(registration.Id))
+    if (!context.SupportsExtension(registration.Id) && !(registration.AnswersUndeclaredPeers && registration.SupportsRevision(context.ProtocolVersion)))
     {
       // An extension that insists on being declared answers -32021 on the revisions it works on; elsewhere the method does not exist.
       if (registration.UndeclaredRequestsFail && registration.SupportsRevision(context.ProtocolVersion))
