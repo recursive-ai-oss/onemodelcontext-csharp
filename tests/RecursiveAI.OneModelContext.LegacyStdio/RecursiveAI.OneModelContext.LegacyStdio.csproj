@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A small stdio server and a small client over a spawned process, for black-box checks of the legacy revisions against
+       other implementations. Not a test run in itself: tests/legacy-stdio/README.md says how it is driven. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext/RecursiveAI.OneModelContext.csproj" />
+  </ItemGroup>
+
+</Project>

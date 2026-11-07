@@ -31,5 +31,19 @@ if (decoded is null || decoded.Text != "hi" || decoded.Content.Count != 2 || dec
   return 1;
 }
 
+// The legacy handshake and a version-shaped result, which rewrite JSON through JsonNode.
+var server = new RecursiveAI.OneModelContext.ContextServer("smoke", "1");
+server.Tools.Add(
+  new RecursiveAI.OneModelContext.ToolDefinition("t", "d", JsonDocument.Parse("{\"type\":\"object\"}").RootElement) { Title = "T" },
+  (_, _) => System.Threading.Tasks.ValueTask.FromResult(CallToolResult.FromText("x")));
+var session = new RecursiveAI.OneModelContext.Wire.ServerSessionState();
+await server.HandleMessageAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"c","version":"1"}}}""", session);
+var listed = await server.HandleMessageAsync("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""", session);
+if (listed is null || listed.Contains("\"title\"", StringComparison.Ordinal) || !listed.Contains("\"name\":\"t\"", StringComparison.Ordinal))
+{
+  Console.Error.WriteLine("legacy result not shaped: " + listed);
+  return 1;
+}
+
 Console.WriteLine("ok " + response);
 return 0;
