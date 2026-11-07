@@ -46,6 +46,9 @@ internal sealed class CliOptions
 
   public List<string> AllowOrigins { get; } = [];
 
+  /// <summary>Extra <c>Host</c> header values <c>proxy</c> accepts besides loopback names.</summary>
+  public List<string> AllowHosts { get; } = [];
+
   /// <summary>The first problem found, or null.</summary>
   public string? Error { get; private set; }
 
@@ -203,6 +206,13 @@ internal sealed class CliOptions
           break;
         case "--token":
           o.Token = Value();
+          break;
+        case "--allow-host":
+          if (Value() is { } allowedHost)
+          {
+            o.AllowHosts.Add(allowedHost);
+          }
+
           break;
         case "--allow-origin":
           if (Value() is { } origin)

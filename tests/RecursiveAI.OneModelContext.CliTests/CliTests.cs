@@ -196,4 +196,101 @@ public sealed class CliTests
   [InlineData("x:y")]
   [InlineData("70000")]
   public void BadListenIsRejected(string text) => Assert.False(CliOptions.TryParseListen(text, out _, out _));
+
+  private static async Task<(CliApp App, Task<int> Run, StringWriter Out, StringWriter Err, CancellationTokenSource Stop)> StartProxyAsync(params string[] args)
+  {
+    var output = new StringWriter();
+    var error = new StringWriter();
+    var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+    var app = new CliApp(output, error, new StringReader(""), "test", colour: false);
+    var run = Task.Run(() => app.RunAsync(args, stop.Token));
+    for (var i = 0; i < 300 && !output.ToString().Contains("listening on", StringComparison.Ordinal) && !run.IsCompleted; i++)
+    {
+      await Task.Delay(50, TestContext.Current.CancellationToken);
+    }
+
+    return (app, run, output, error, stop);
+  }
+
+  private static async Task<int> PostInitializeAsync(Uri url, string? authorization)
+  {
+    using var http = new HttpClient();
+    using var request = new HttpRequestMessage(HttpMethod.Post, url)
+    {
+      Content = new StringContent("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"t\",\"version\":\"1\"}}}", System.Text.Encoding.UTF8, "application/json"),
+    };
+    request.Headers.Accept.ParseAdd("application/json");
+    request.Headers.Accept.ParseAdd("text/event-stream");
+    if (authorization is not null)
+    {
+      request.Headers.TryAddWithoutValidation("Authorization", authorization);
+    }
+
+    using var response = await http.SendAsync(request, TestContext.Current.CancellationToken);
+    return (int)response.StatusCode;
+  }
+
+  [Fact]
+  public async Task ProxyServesAStdioServerOverHttpAndChecksTheToken()
+  {
+    var (_, run, output, _, stop) = await StartProxyAsync("proxy", Server, "--listen", "0", "--token", "test-token-123");
+    try
+    {
+      var url = new Uri(output.ToString().Split("listening on ")[1].Trim());
+      Assert.Equal(200, await PostInitializeAsync(url, "Bearer test-token-123"));
+      Assert.Equal(401, await PostInitializeAsync(url, "Bearer wrong"));
+      Assert.Equal(401, await PostInitializeAsync(url, null));
+      Assert.Equal(401, await PostInitializeAsync(url, "Basic test-token-123"));
+    }
+    finally
+    {
+      await stop.CancelAsync();
+    }
+
+    Assert.Equal(0, await run);
+    Assert.DoesNotContain("test-token-123", output.ToString());
+  }
+
+  [Fact]
+  public async Task ProxyChecksOriginAndPath()
+  {
+    var (_, run, output, _, stop) = await StartProxyAsync("proxy", Server, "--listen", "0");
+    try
+    {
+      var url = new Uri(output.ToString().Split("listening on ")[1].Trim());
+      using var http = new HttpClient();
+      using var evil = new HttpRequestMessage(HttpMethod.Post, url) { Content = new StringContent("{}") };
+      evil.Headers.TryAddWithoutValidation("Origin", "http://evil.example");
+      Assert.Equal(403, (int)(await http.SendAsync(evil, TestContext.Current.CancellationToken)).StatusCode);
+      var other = await http.PostAsync(new Uri(url, "/elsewhere"), new StringContent("{}"), TestContext.Current.CancellationToken);
+      Assert.Equal(404, (int)other.StatusCode);
+    }
+    finally
+    {
+      await stop.CancelAsync();
+    }
+
+    Assert.Equal(0, await run);
+  }
+
+  [Theory]
+  [InlineData("--listen", "0.0.0.0:0")]
+  [InlineData("--listen", "0.0.0.0:0", "--allow-non-loopback")]
+  [InlineData("--listen", "not-an-address:1")]
+  [InlineData("--listen", "70000")]
+  [InlineData("--token", "")]
+  public async Task ProxyRefusesUnsafeOrBadListenSettings(params string[] extra)
+  {
+    var (code, _, err) = await RunAsync("", ["proxy", Server, .. extra]);
+    Assert.Equal(2, code);
+    Assert.StartsWith("onemodelcontext:", err);
+  }
+
+  [Fact]
+  public async Task ProxyToStdioTakesNoListenOptions()
+  {
+    var (code, _, err) = await RunAsync("", "proxy", "http://127.0.0.1:1/mcp", "--token", "x");
+    Assert.Equal(2, code);
+    Assert.Contains("stdio", err);
+  }
 }

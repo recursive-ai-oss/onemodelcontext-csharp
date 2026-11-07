@@ -40,7 +40,11 @@ internal sealed partial class CliApp(TextWriter output, TextWriter error, TextRe
       onemodelcontext call <server> <tool> [--arg k=v]... [--json @file | --args '{...}']
       onemodelcontext read <server> <uri>
       onemodelcontext prompt <server> <name> [--arg k=v]...
-      onemodelcontext proxy <server> [--listen [host:]port] [--token T] [--allow-non-loopback] [--allow-origin O]...
+      onemodelcontext proxy <server> [--listen [host:]port] [--token T] [--allow-non-loopback] [--allow-origin O]... [--allow-host H]... [--path /mcp]
+
+    proxy serves one upstream across one hop: a stdio command is served over HTTP (loopback unless --allow-non-loopback, which
+    also requires --token), and an http(s) URL is served on this process's stdin and stdout. --token T or --token @file makes
+    HTTP callers send "Authorization: Bearer T".
 
     <server> is a command line ("npx -y some-server"), an http(s) URL, or a name in the config file.
     The config file is --config, ./onemodelcontext.json or the per-user onemodelcontext/config.json:
@@ -330,11 +334,5 @@ internal sealed partial class CliApp(TextWriter output, TextWriter error, TextRe
     var result = await client.GetPromptAsync(o.Positional[1], arguments.Count > 0 ? arguments : null, ct).ConfigureAwait(false);
     await output.WriteAsync(o.Json ? JsonSerializer.Serialize(result, WireJsonContext.Default.GetPromptResult) + "\n" : Render.PromptText(result)).ConfigureAwait(false);
     return ExitCode.Ok;
-  }
-
-  internal Task<int> ProxyAsync(CliOptions o, CancellationToken ct)
-  {
-    _ = ct;
-    return FailUsageAsync("'proxy' needs the HTTP transports, which are not in this build.");
   }
 }
