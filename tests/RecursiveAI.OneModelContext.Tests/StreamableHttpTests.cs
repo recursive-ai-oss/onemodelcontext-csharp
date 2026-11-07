@@ -755,8 +755,40 @@ public class StreamableHttpTests
     var priming = await call.Events().NextAsync();
     var resume = new TestExchange("GET", headers: [("Accept", "text/event-stream"), ("Mcp-Session-Id", session), ("Last-Event-ID", priming!.Id!)]).Run(endpoint);
     var events = resume.Events();
-    await Task.Delay(100, TestContext.Current.CancellationToken);
+    await resume.HeadersSent.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
+    // The result reaches the resumed stream whether it was attached before or after this point: live, or replayed from the log.
+    proceed.SetResult();
+    var live = await events.NextAsync();
+
+    Assert.Equal("live", JsonDocument.Parse(live!.Data).RootElement.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString());
+  }
+
+  [Fact]
+  public async Task A_close_the_handler_asked_for_does_not_end_a_connection_that_resumed_in_the_meantime()
+  {
+    // The priming event is enough for a client to reconnect, which can happen before the handler gets to closing its connection.
+    var (server, endpoint) = Create();
+    var resumed = new TaskCompletionSource();
+    var proceed = new TaskCompletionSource();
+    server.Tools.Add(new ToolDefinition("stale", "Reports progress, then closes.", ObjectSchema), async (_, ctx) =>
+    {
+      await ctx.ReportProgressAsync(1);
+      await resumed.Task;
+      await HttpRequestScope.Current!.CloseSseConnectionAsync(TimeSpan.Zero);
+      await proceed.Task;
+      return CallToolResult.FromText("live");
+    });
+    var session = await OpenSessionAsync(endpoint);
+    var call = TestExchange.Post(LegacyCall("stale").Replace("\"arguments\":{}", "\"arguments\":{},\"_meta\":{\"progressToken\":\"t\"}", StringComparison.Ordinal), ("Mcp-Session-Id", session)).Run(endpoint);
+    var priming = await call.Events().NextAsync();
+    var resume = new TestExchange("GET", headers: [("Accept", "text/event-stream"), ("Mcp-Session-Id", session), ("Last-Event-ID", priming!.Id!)]).Run(endpoint);
+    var events = resume.Events();
+
+    // The replayed progress event proves the resumed connection is attached; only then may the handler close its own.
+    var progress = await events.NextAsync();
+    Assert.Contains("notifications/progress", progress!.Data, StringComparison.Ordinal);
+    resumed.SetResult();
     proceed.SetResult();
     var live = await events.NextAsync();
 

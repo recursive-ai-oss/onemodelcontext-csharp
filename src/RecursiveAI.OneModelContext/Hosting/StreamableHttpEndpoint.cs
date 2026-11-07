@@ -902,7 +902,7 @@ public sealed class StreamableHttpEndpoint : IDisposable
 
       if (await EnsureStreamAsync(cancellationToken).ConfigureAwait(false) is { } stream)
       {
-        await stream.CloseConnectionAsync(retryAfter).ConfigureAwait(false);
+        await stream.CloseConnectionAsync(retryAfter, _connection).ConfigureAwait(false);
       }
     }
 

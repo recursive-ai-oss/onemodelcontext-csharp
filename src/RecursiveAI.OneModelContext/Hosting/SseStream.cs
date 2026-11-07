@@ -200,12 +200,14 @@ internal sealed class SseStream
   /// Ends the connection without ending the stream, after telling the client when to come back (<c>retry</c>). The client then polls
   /// with <c>Last-Event-ID</c> (2025-11-25 Streamable HTTP, "Sending Messages to the Server", item 6).
   /// </summary>
-  internal async ValueTask CloseConnectionAsync(TimeSpan retryAfter)
+  internal async ValueTask CloseConnectionAsync(TimeSpan retryAfter, SseConnection? only)
   {
     await _gate.WaitAsync().ConfigureAwait(false);
     try
     {
-      if (_current is { } connection)
+      // Only the connection the request itself was answering on: a client that reconnected quickly (the priming event is enough to do
+      // so) now owns the stream, and a close the handler asked for earlier must not end the new connection.
+      if (_current is { } connection && ReferenceEquals(connection, only))
       {
         try
         {
