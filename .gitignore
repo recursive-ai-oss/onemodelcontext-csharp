@@ -15,6 +15,7 @@
 !/samples/
 !/templates/
 !/conformance/
+!/interop/
 !/fuzz/
 !/docs/
 !/README.md

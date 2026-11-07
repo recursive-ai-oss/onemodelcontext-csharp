@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- The fixture server the interop drivers point the reference SDK clients and the Inspector at, over stdio and Streamable HTTP. It ships in no package. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>RecursiveAI.OneModelContext.Interop.Server</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../../src/RecursiveAI.OneModelContext.AspNetCore/RecursiveAI.OneModelContext.AspNetCore.csproj" />
+  </ItemGroup>
+
+</Project>
