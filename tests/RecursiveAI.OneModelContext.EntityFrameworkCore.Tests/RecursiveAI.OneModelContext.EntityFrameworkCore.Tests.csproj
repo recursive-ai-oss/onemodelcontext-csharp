@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>RecursiveAI.OneModelContext.EntityFrameworkCore.Tests</RootNamespace>
+    <NoWarn>$(NoWarn);OMC0004</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <!-- The provider the stores are exercised against; the adapter itself references only Entity Framework Core. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext.EntityFrameworkCore/RecursiveAI.OneModelContext.EntityFrameworkCore.csproj" />
+  </ItemGroup>
+
+</Project>
