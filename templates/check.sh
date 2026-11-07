@@ -1,11 +1,14 @@
 #!/bin/bash
 # Packs the library and the template pack into a scratch feed, installs the templates into a scratch
 # dotnet home, then creates each template, builds it, runs it, and publishes the stdio server with NativeAOT.
-# Needs the .NET 10 SDK on PATH; set ONEMCP_ARTIFACTS to a scratch directory (default: ./artifacts-templates).
+# Needs the .NET 10 SDK on PATH. Set ONEMODELCONTEXT_TEMPLATE_CHECK_DIR to a scratch directory outside the repository: projects
+# created inside it would pick up the repository's central package management and fail to restore.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(dirname "$here")
-work=${ONEMCP_ARTIFACTS:-$repo/artifacts-templates}/template-check
+: "${ONEMODELCONTEXT_TEMPLATE_CHECK_DIR:?set ONEMODELCONTEXT_TEMPLATE_CHECK_DIR to a directory outside the repository}"
+case "$(cd "$(dirname "$ONEMODELCONTEXT_TEMPLATE_CHECK_DIR")" 2>/dev/null && pwd)/" in "$repo"/*) echo "ONEMODELCONTEXT_TEMPLATE_CHECK_DIR must be outside $repo" >&2; exit 2;; esac
+work=$ONEMODELCONTEXT_TEMPLATE_CHECK_DIR/template-check
 version=0.1.0-dev.$(date +%s)
 rm -rf "$work"
 mkdir -p "$work/feed" "$work/home"
