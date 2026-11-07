@@ -22,6 +22,8 @@
     <ProjectReference Include="../../samples/Explorer/RecursiveAI.OneModelContext.Samples.Explorer.csproj" />
     <ProjectReference Include="../../samples/QuickPath/RecursiveAI.OneModelContext.Samples.QuickPath.csproj" />
     <ProjectReference Include="../../samples/AppsServer/RecursiveAI.OneModelContext.Samples.AppsServer.csproj" />
+    <ProjectReference Include="../../samples/ProtectedServer/RecursiveAI.OneModelContext.Samples.ProtectedServer.csproj" />
+    <ProjectReference Include="../../samples/HttpServer/RecursiveAI.OneModelContext.Samples.HttpServer.csproj" />
   </ItemGroup>
 
 </Project>

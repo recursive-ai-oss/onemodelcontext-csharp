@@ -11,6 +11,7 @@
 !/Directory.Packages.props
 !/RecursiveAI.OneModelContext.slnx
 !/src/
+!/tools/
 !/tests/
 !/samples/
 !/templates/
