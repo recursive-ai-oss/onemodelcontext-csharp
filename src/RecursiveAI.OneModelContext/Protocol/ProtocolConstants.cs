@@ -223,6 +223,7 @@ public static class WireNames
 }
 
 /// <summary>Log levels of the logging utility, least to most severe (RFC 5424 names).</summary>
+[Obsolete(DeprecatedFeatures.Logging, DiagnosticId = DeprecatedFeatures.LoggingId)]
 public static class LoggingLevels
 {
   /// <summary>Debug.</summary>

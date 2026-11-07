@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -125,6 +126,7 @@ public sealed class ProgressNotificationParams : RequestParams
 }
 
 /// <summary>Parameters of <c>notifications/message</c>.</summary>
+[Obsolete(DeprecatedFeatures.Logging, DiagnosticId = DeprecatedFeatures.LoggingId)]
 public sealed class LoggingMessageNotificationParams : RequestParams
 {
   /// <summary>One of <see cref="LoggingLevels"/>.</summary>
@@ -141,6 +143,7 @@ public sealed class LoggingMessageNotificationParams : RequestParams
 }
 
 /// <summary>Parameters of <c>logging/setLevel</c> (legacy).</summary>
+[Obsolete(DeprecatedFeatures.Logging, DiagnosticId = DeprecatedFeatures.LoggingId)]
 public sealed class SetLevelRequestParams : RequestParams
 {
   /// <summary>The minimum level to deliver.</summary>
@@ -354,6 +357,7 @@ public sealed class CompleteResult : Result
 }
 
 /// <summary>Parameters of <c>sampling/createMessage</c> (deprecated in 2026-07-28).</summary>
+[Obsolete(DeprecatedFeatures.Sampling, DiagnosticId = DeprecatedFeatures.SamplingId)]
 public sealed class CreateMessageRequestParams : RequestParams
 {
   /// <summary>The conversation.</summary>
@@ -399,6 +403,7 @@ public sealed class CreateMessageRequestParams : RequestParams
 }
 
 /// <summary>Result of <c>sampling/createMessage</c>.</summary>
+[Obsolete(DeprecatedFeatures.Sampling, DiagnosticId = DeprecatedFeatures.SamplingId)]
 public sealed class CreateMessageResult : Result
 {
   /// <summary><c>assistant</c>.</summary>
@@ -420,9 +425,11 @@ public sealed class CreateMessageResult : Result
 }
 
 /// <summary>Parameters of <c>roots/list</c> (deprecated in 2026-07-28).</summary>
+[Obsolete(DeprecatedFeatures.Roots, DiagnosticId = DeprecatedFeatures.RootsId)]
 public sealed class ListRootsRequestParams : RequestParams;
 
 /// <summary>Result of <c>roots/list</c>.</summary>
+[Obsolete(DeprecatedFeatures.Roots, DiagnosticId = DeprecatedFeatures.RootsId)]
 public sealed class ListRootsResult : Result
 {
   /// <summary>The roots.</summary>
