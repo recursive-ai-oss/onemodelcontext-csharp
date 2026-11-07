@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -11,7 +13,7 @@ namespace RecursiveAI.OneModelContext.OAuth;
 /// <summary>
 /// The redirect receiver for desktop and command-line programs: listens on the loopback interface on a port the operating system picks,
 /// asks the host to open the browser, and returns the redirect the authorization server sends back (RFC 8252 section 7.3). It binds
-/// <c>127.0.0.1</c> only, answers only <c>GET</c> on its callback path, reads at most 8 KiB of a request within 10 seconds, and shuts
+/// <c>127.0.0.1</c> only, answers only <c>GET</c> on its callback path whose <c>state</c> matches the authorization request in progress (anything else gets a 404 and is ignored), reads at most 8 KiB of a request within 10 seconds, and shuts
 /// down with the object. Register <see cref="RedirectUri"/> with the authorization server (or list it in the Client ID Metadata
 /// Document).
 /// </summary>
@@ -22,6 +24,7 @@ public sealed class LoopbackRedirectReceiver : IAuthorizationUserAgent, IDisposa
   private readonly Func<Uri, CancellationToken, ValueTask> _openBrowser;
   private readonly string _path;
   private readonly TimeProvider _time;
+  private volatile string? _expectedState;
 
   /// <summary>Starts listening.</summary>
   /// <param name="openBrowser">Opens the authorization URL for the user, for example by starting the system browser. It must return once the browser is launched, not when the user is done. The URL holds no secret.</param>
@@ -69,6 +72,10 @@ public sealed class LoopbackRedirectReceiver : IAuthorizationUserAgent, IDisposa
   public async ValueTask<Uri> AuthorizeAsync(Uri authorizationUrl, CancellationToken cancellationToken)
   {
     ArgumentNullException.ThrowIfNull(authorizationUrl);
+    // Only a redirect that carries this request's state value is the answer (RFC 6749 section 10.12). Anything else that reaches the
+    // port, such as a request a web page fires at 127.0.0.1, is refused and the wait goes on. An authorization URL with no state (a
+    // custom caller) accepts the first callback, as before.
+    _expectedState = StateOf(authorizationUrl.Query.AsSpan().TrimStart('?'));
     while (_callbacks.Reader.TryRead(out _))
     {
       // A redirect left over from an earlier attempt belongs to a different state value.
@@ -91,6 +98,33 @@ public sealed class LoopbackRedirectReceiver : IAuthorizationUserAgent, IDisposa
   /// <summary>Stops listening.</summary>
   public void Dispose() => _server.DisposeAsync().AsTask().GetAwaiter().GetResult();
 
+  private bool StateMatches(string query)
+  {
+    if (_expectedState is not { } expected)
+    {
+      return true;
+    }
+
+    // Constant-time, so the response time says nothing about how much of the value a guess got right.
+    var offered = StateOf(query.AsSpan());
+    return offered is not null && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(offered), Encoding.UTF8.GetBytes(expected));
+  }
+
+  private static string? StateOf(ReadOnlySpan<char> query)
+  {
+    foreach (var range in query.Split('&'))
+    {
+      var pair = query[range];
+      var eq = pair.IndexOf('=');
+      if (eq > 0 && pair[..eq].SequenceEqual("state"))
+      {
+        return Uri.UnescapeDataString(pair[(eq + 1)..].ToString().Replace('+', ' '));
+      }
+    }
+
+    return null;
+  }
+
   // Anything but GET on the callback path with a loopback Host (which also refuses DNS-rebinding names) gets a 404 and is ignored.
   private async ValueTask HandleAsync(IHttpExchange exchange)
   {
@@ -98,7 +132,8 @@ public sealed class LoopbackRedirectReceiver : IAuthorizationUserAgent, IDisposa
     var host = request.Headers.GetFirst("Host");
     var port = RedirectUri.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
     var ours = request.Method == "GET" && request.Path == _path
-      && (string.Equals(host, "127.0.0.1:" + port, StringComparison.Ordinal) || string.Equals(host, "localhost:" + port, StringComparison.OrdinalIgnoreCase));
+      && (string.Equals(host, "127.0.0.1:" + port, StringComparison.Ordinal) || string.Equals(host, "localhost:" + port, StringComparison.OrdinalIgnoreCase))
+      && StateMatches(request.Query);
     if (ours)
     {
       _callbacks.Writer.TryWrite(request.Query);

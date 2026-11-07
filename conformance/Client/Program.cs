@@ -287,16 +287,45 @@ internal sealed class HeadlessUserAgent(Uri redirect, HttpClient http) : IAuthor
 /// <summary>What each authorization scenario hands the client (in MCP_CONFORMANCE_CONTEXT) and how the client is set up for it.</summary>
 internal static class AuthScenarios
 {
+  // The library will not send a secret to an authorization server the resource merely names, so a real application pins the issuer in
+  // its configuration. The suite's context does not carry one; this client takes the first server the test server's own
+  // protected resource metadata lists, which is the one the suite means.
+  private static string? TrustedIssuer(Uri resource)
+  {
+    using var http = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false });
+    var origin = resource.GetLeftPart(UriPartial.Authority);
+    var path = resource.AbsolutePath == "/" ? string.Empty : resource.AbsolutePath;
+    foreach (var candidate in new[] { origin + "/.well-known/oauth-protected-resource" + path, origin + "/.well-known/oauth-protected-resource" })
+    {
+      try
+      {
+        using var document = JsonDocument.Parse(http.GetStringAsync(candidate).GetAwaiter().GetResult());
+        if (document.RootElement.TryGetProperty("authorization_servers", out var servers) && servers.GetArrayLength() > 0)
+        {
+          return servers[0].GetString();
+        }
+      }
+      catch (Exception ex) when (ex is HttpRequestException or JsonException)
+      {
+        // Try the next location.
+      }
+    }
+
+    // A server with no protected resource metadata is its own authorization server.
+    return origin;
+  }
+
   public static OAuthClientOptions Options(Uri url, string scenario, IAuthorizationUserAgent agent)
   {
     var context = Environment.GetEnvironmentVariable("MCP_CONFORMANCE_CONTEXT") is { Length: > 0 } text ? JsonDocument.Parse(text).RootElement : default;
     string? Ctx(string name) => context.ValueKind == JsonValueKind.Object && context.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
     var clientId = Ctx("client_id");
     var secret = Ctx("client_secret");
+    var issuer = secret is not null || scenario.StartsWith("auth/client-credentials", StringComparison.Ordinal) || scenario.Contains("enterprise", StringComparison.Ordinal) ? TrustedIssuer(url) : null;
     switch (scenario)
     {
       case "auth/client-credentials-basic":
-        return new OAuthClientOptions(url) { ClientCredentials = new ClientCredentialsGrant(clientId!, secret!) };
+        return new OAuthClientOptions(url) { ClientCredentials = new ClientCredentialsGrant(clientId!, secret!) { ExpectedIssuer = issuer } };
       case "auth/client-credentials-jwt":
         var pem = Ctx("private_key_pem")!;
         AsymmetricAlgorithm key = ECDsa.Create();
@@ -310,7 +339,7 @@ internal static class AuthScenarios
           key.ImportFromPem(pem);
         }
 
-        return new OAuthClientOptions(url) { ClientCredentials = new ClientCredentialsGrant(clientId!, key, Ctx("kid")) };
+        return new OAuthClientOptions(url) { ClientCredentials = new ClientCredentialsGrant(clientId!, key, Ctx("kid")) { ExpectedIssuer = issuer } };
       case "auth/enterprise-managed-authorization":
         var idToken = Ctx("idp_id_token")!;
         return new OAuthClientOptions(url)
@@ -318,6 +347,7 @@ internal static class AuthScenarios
           Enterprise = new EnterpriseManagedAuthorization(new Uri(Ctx("idp_token_endpoint")!), _ => ValueTask.FromResult(idToken), clientId!)
           {
             ClientSecret = secret,
+            ExpectedIssuer = issuer,
             IdentityProviderClientId = Ctx("idp_client_id"),
           },
         };
@@ -325,7 +355,7 @@ internal static class AuthScenarios
         return new OAuthClientOptions(url)
         {
           UserAgent = agent,
-          PreRegistered = scenario is "auth/pre-registration" or "auth/token-endpoint-auth-basic" or "auth/token-endpoint-auth-post" && clientId is not null ? new PreRegisteredClient(clientId, secret) : null,
+          PreRegistered = scenario is "auth/pre-registration" or "auth/token-endpoint-auth-basic" or "auth/token-endpoint-auth-post" && clientId is not null ? new PreRegisteredClient(clientId, secret, issuer) : null,
           ClientIdMetadataUrl = Ctx("client_id_metadata_url") ?? "https://conformance-test.local/client-metadata.json",
         };
     }

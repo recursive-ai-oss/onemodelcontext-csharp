@@ -47,8 +47,11 @@ internal sealed class CliOptions
   /// <summary>The OAuth client for <c>login</c>: a Client ID Metadata Document URL (https) or a pre-registered client id.</summary>
   public string? ClientId { get; private set; }
 
-  /// <summary>The pre-registered client's secret, or <c>@file</c> holding it.</summary>
+  /// <summary>The pre-registered client's secret: <c>env:NAME</c>, <c>-</c> (first line of standard input), <c>@file</c>, or the secret itself.</summary>
   public string? ClientSecret { get; private set; }
+
+  /// <summary>The issuer of the authorization server the pre-registered client belongs to. Required with a client secret.</summary>
+  public string? Issuer { get; private set; }
 
   /// <summary>Print the authorization URL instead of opening a browser.</summary>
   public bool NoBrowser { get; private set; }
@@ -233,6 +236,9 @@ internal sealed class CliOptions
           break;
         case "--client-secret":
           o.ClientSecret = Value();
+          break;
+        case "--issuer":
+          o.Issuer = Value();
           break;
         case "--no-browser":
           o.NoBrowser = true;

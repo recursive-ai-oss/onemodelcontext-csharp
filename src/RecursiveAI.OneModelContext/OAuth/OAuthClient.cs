@@ -33,6 +33,7 @@ public sealed class OAuthClient : IDisposable
   private readonly TimeProvider _time;
   private readonly HttpClient _http;
   private readonly bool _ownsHttp;
+  private readonly bool _loopbackResource;
   private readonly SemaphoreSlim _gate = new(1, 1);
   private readonly string _tokenKey;
   private string _indicator;
@@ -46,16 +47,20 @@ public sealed class OAuthClient : IDisposable
     ArgumentNullException.ThrowIfNull(options);
     _options = options;
     _time = options.TimeProvider ?? TimeProvider.System;
-    if (options.HttpClient is null)
+    _loopbackResource = OAuthUri.IsLoopbackHost(options.Resource);
+    if (options.HttpHandler is null)
     {
       // Redirects are never followed: a credential must not travel to a place the server merely pointed at.
       _http = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false });
-      _ownsHttp = true;
     }
     else
     {
-      _http = options.HttpClient;
+      // A caller's handler is accepted only when it can be shown not to follow redirects (a 307 would replay the token request body).
+      RedirectPolicy.Require(options.HttpHandler, nameof(options));
+      _http = new HttpClient(options.HttpHandler, disposeHandler: false);
     }
+
+    _ownsHttp = true;
 
     _tokenKey = "token:" + options.Canonical;
     _indicator = options.Canonical;
@@ -82,6 +87,19 @@ public sealed class OAuthClient : IDisposable
         return record.AccessToken;
       }
 
+      // Another process sharing the store may have refreshed (and rotated the refresh token) since this one read it. Look again before
+      // spending a refresh token that may already be spent.
+      record = await ReloadAsync(cancellationToken).ConfigureAwait(false);
+      if (record?.AccessToken is null)
+      {
+        return null;
+      }
+
+      if (IsFresh(record))
+      {
+        return record.AccessToken;
+      }
+
       if (record.RefreshToken is null || record.Issuer is null)
       {
         return null;
@@ -89,6 +107,7 @@ public sealed class OAuthClient : IDisposable
 
       try
       {
+        RequirePinnedIssuer();
         return await RefreshAsync(record, cancellationToken).ConfigureAwait(false);
       }
       catch (OAuthException)
@@ -156,9 +175,10 @@ public sealed class OAuthClient : IDisposable
   /// <param name="stepUp">True for an <c>insufficient_scope</c> answer: the new scope is the union of the scopes already requested and the challenged ones.</param>
   /// <param name="cancellationToken">Cancels the flow, including the wait for the user.</param>
   /// <returns>The access token.</returns>
-  /// <exception cref="OAuthException">Discovery, registration, the authorization response or the token request failed or was refused for safety reasons.</exception>
+  /// <exception cref="OAuthException">Discovery, registration, the authorization response or the token request failed or was refused for safety reasons; <c>issuer_required</c> when a secret or signing key is configured with no pinned issuer.</exception>
   public async ValueTask<string> AuthorizeAsync(BearerChallenge? challenge, string? rejectedToken, bool stepUp, CancellationToken cancellationToken = default)
   {
+    RequirePinnedIssuer();
     await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
     try
     {
@@ -237,6 +257,27 @@ public sealed class OAuthClient : IDisposable
   private bool IsFresh(TokenRecord record) =>
     record.AccessToken is not null && (record.ExpiresAt is null || record.ExpiresAt.Value - _options.ExpirySkew > _time.GetUtcNow());
 
+  private async ValueTask<TokenRecord?> ReloadAsync(CancellationToken cancellationToken)
+  {
+    _record = await _options.Store.GetAsync(_tokenKey, cancellationToken).ConfigureAwait(false);
+    _loaded = true;
+    return _record;
+  }
+
+  // A client secret, a signing key or an identity assertion goes only to an authorization server the application named. Left to the
+  // resource's metadata (RFC 9728 section 7.6 lets the client choose among the listed servers), a hostile or compromised resource could
+  // choose its own and receive the credential. Checked before any request is made.
+  private void RequirePinnedIssuer()
+  {
+    var missing = _options.ClientCredentials is { ExpectedIssuer: null }
+      || _options.Enterprise is { ExpectedIssuer: null }
+      || (_options.ClientCredentials is null && _options.Enterprise is null && _options.PreRegistered is { ClientSecret: not null, Issuer: null });
+    if (missing)
+    {
+      throw new OAuthException("A client secret, signing key or identity assertion is configured without the issuer of the authorization server it belongs to, so nothing was sent. Set ExpectedIssuer (or PreRegisteredClient.Issuer).", "issuer_required");
+    }
+  }
+
   private async ValueTask<TokenRecord?> LoadAsync(CancellationToken cancellationToken)
   {
     if (!_loaded)
@@ -259,7 +300,7 @@ public sealed class OAuthClient : IDisposable
     var resource = _options.Resource;
     var origin = resource.GetLeftPart(UriPartial.Authority);
     var candidates = new List<Uri>();
-    if (fromChallenge is not null && OAuthUri.TryHttp(fromChallenge, out var announced))
+    if (fromChallenge is not null && OAuthUri.TryHttp(fromChallenge, _loopbackResource, out var announced))
     {
       candidates.Add(announced);
     }
@@ -329,7 +370,7 @@ public sealed class OAuthClient : IDisposable
   // 2026-07-28 authorization-server-discovery, Authorization Server Metadata Discovery.
   private async Task<AuthorizationServerMetadata> DiscoverServerAsync(string issuer, bool legacy, CancellationToken cancellationToken)
   {
-    if (!Uri.TryCreate(issuer, UriKind.Absolute, out var issuerUri) || !OAuthUri.IsAllowedEndpoint(issuerUri) || issuerUri.Query.Length != 0)
+    if (!Uri.TryCreate(issuer, UriKind.Absolute, out var issuerUri) || !OAuthUri.IsAllowedEndpoint(issuerUri, _loopbackResource) || issuerUri.Query.Length != 0)
     {
       throw new OAuthException("The authorization server's issuer is not an HTTPS URL.", "invalid_issuer");
     }
@@ -364,7 +405,7 @@ public sealed class OAuthClient : IDisposable
         throw new OAuthException("The authorization server metadata names a different issuer than the one it was fetched for, so it was not used.", "metadata_issuer_mismatch");
       }
 
-      if (!OAuthUri.TryHttp(metadata.TokenEndpoint, out _))
+      if (!OAuthUri.TryHttp(metadata.TokenEndpoint, _loopbackResource, out _))
       {
         throw new OAuthException("The authorization server metadata has no usable token endpoint.", "invalid_server_metadata");
       }
@@ -431,7 +472,7 @@ public sealed class OAuthClient : IDisposable
       throw new OAuthException("The authorization server does not advertise PKCE with S256, so authorization was not started.", "pkce_unsupported");
     }
 
-    if (!OAuthUri.TryHttp(server.AuthorizationEndpoint, out var authorizationEndpoint))
+    if (!OAuthUri.TryHttp(server.AuthorizationEndpoint, _loopbackResource, out var authorizationEndpoint))
     {
       throw new OAuthException("The authorization server has no usable authorization endpoint.", "invalid_server_metadata");
     }
@@ -502,7 +543,7 @@ public sealed class OAuthClient : IDisposable
 #pragma warning disable CS0618, OMC0004 // Dynamic registration is deprecated by the specification; it is the documented last resort.
     var allowed = _options.AllowDynamicRegistration;
 #pragma warning restore CS0618, OMC0004
-    if (allowed && OAuthUri.TryHttp(server.RegistrationEndpoint, out var registrationEndpoint))
+    if (allowed && OAuthUri.TryHttp(server.RegistrationEndpoint, _loopbackResource, out var registrationEndpoint))
     {
       var registered = await RegisterAsync(registrationEndpoint, redirect, cancellationToken).ConfigureAwait(false);
       await _options.Store.SetAsync(key, new TokenRecord { Issuer = issuer, ClientId = registered.ClientId, ClientSecret = registered.Secret, Dynamic = true }, cancellationToken).ConfigureAwait(false);
@@ -631,7 +672,7 @@ public sealed class OAuthClient : IDisposable
       throw new OAuthException("The authorization server does not support the identity assertion authorization grant profile.", "unsupported_grant_profile");
     }
 
-    if (!OAuthUri.IsAllowedEndpoint(enterprise.IdentityProviderTokenEndpoint))
+    if (!OAuthUri.IsAllowedEndpoint(enterprise.IdentityProviderTokenEndpoint, _loopbackResource))
     {
       throw new OAuthException("The identity provider token endpoint must be HTTPS.", "invalid_server_metadata");
     }
@@ -682,7 +723,7 @@ public sealed class OAuthClient : IDisposable
 
   // ----- refresh ---------------------------------------------------------------------------------------------------------------------
 
-  private async Task<string?> RefreshAsync(TokenRecord record, CancellationToken cancellationToken)
+  private async Task<string?> RefreshAsync(TokenRecord record, CancellationToken cancellationToken, bool retried = false)
   {
     var issuer = record.Issuer!;
     _indicator = record.Resource ?? _options.Canonical;
@@ -703,6 +744,23 @@ public sealed class OAuthClient : IDisposable
     }
     catch (OAuthException ex) when (ex.Error is "invalid_grant" or "invalid_client")
     {
+      // Another process may have rotated the refresh token first (the server then refuses ours as spent). If the store now holds a
+      // different refresh token, that process's sign-in is the truth: adopt it rather than erasing it.
+      if (!retried && await _options.Store.GetAsync(_tokenKey, cancellationToken).ConfigureAwait(false) is { RefreshToken: { } newer } stored
+        && !string.Equals(newer, record.RefreshToken, StringComparison.Ordinal))
+      {
+        _record = stored;
+        _loaded = true;
+        return IsFresh(stored) ? stored.AccessToken : await RefreshAsync(stored, cancellationToken, retried: true).ConfigureAwait(false);
+      }
+
+      if (ex.Error == "invalid_client")
+      {
+        // The client registration itself is refused (deleted at the server, or its secret rotated): forget the stored one so the next
+        // sign-in registers again instead of presenting the same rejected identity.
+        await _options.Store.RemoveAsync("client:" + issuer, cancellationToken).ConfigureAwait(false);
+      }
+
       // The refresh token is spent or revoked: forget it so it is not sent again.
       var cleared = new TokenRecord { Issuer = record.Issuer, ClientId = record.ClientId, Resource = record.Resource, Scope = record.Scope };
       _record = cleared;
@@ -753,7 +811,7 @@ public sealed class OAuthClient : IDisposable
 
   private Task<TokenResponse> TokenRequestAsync(AuthorizationServerMetadata server, List<KeyValuePair<string, string>> form, ClientIdentity client, CancellationToken cancellationToken)
   {
-    if (!OAuthUri.TryHttp(server.TokenEndpoint, out var endpoint))
+    if (!OAuthUri.TryHttp(server.TokenEndpoint, _loopbackResource, out var endpoint))
     {
       throw new OAuthException("The authorization server has no usable token endpoint.", "invalid_server_metadata");
     }
@@ -900,7 +958,7 @@ public sealed class OAuthClient : IDisposable
   // messages are not ours to vouch for.
   private async Task<(int Status, byte[] Body)> FetchAsync(HttpRequestMessage request, CancellationToken cancellationToken)
   {
-    if (request.RequestUri is null || !OAuthUri.IsAllowedEndpoint(request.RequestUri))
+    if (request.RequestUri is null || !OAuthUri.IsAllowedEndpoint(request.RequestUri, _loopbackResource))
     {
       throw new OAuthException("An OAuth endpoint is not an HTTPS URL.", "invalid_endpoint");
     }

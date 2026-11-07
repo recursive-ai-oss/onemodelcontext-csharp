@@ -131,7 +131,7 @@ public interface ITokenProtector
   /// <summary>Decrypts bytes read from storage.</summary>
   /// <param name="protectedBytes">What <see cref="Protect"/> returned.</param>
   /// <returns>The plain text.</returns>
-  /// <exception cref="System.Security.Cryptography.CryptographicException">The bytes cannot be decrypted. The store then treats itself as empty.</exception>
+  /// <exception cref="System.Security.Cryptography.CryptographicException">The bytes cannot be decrypted. The store then reads as empty, and refuses to write, so the file it could not read is never replaced.</exception>
   byte[] Unprotect(byte[] protectedBytes);
 }
 
@@ -178,10 +178,18 @@ public sealed class MemoryTokenStore : ITokenStore
 }
 
 /// <summary>
-/// A token store in one file. On Unix the file is created with mode 0600 (owner read and write) before any secret is written, in a
+/// <para>A token store in one file. On Unix the file is created with mode 0600 (owner read and write) before any secret is written, in a
 /// directory created with mode 0700; on Windows it takes the access rules of the user's profile directory, where it should live. The
 /// file is replaced atomically, so a crash never leaves half a store. With an <see cref="ITokenProtector"/>, the file holds only protected
-/// bytes. Several processes sharing one file is not supported: the last writer wins.
+/// bytes. Several processes may share one file only in the sense that each write replaces the whole file; a client re-reads the store
+/// before it spends a refresh token, so a rotation made by another process is picked up.
+/// </para>
+/// <para>
+/// A file that cannot be trusted is never overwritten. On Unix a file that is writable by its group or by others, one larger than
+/// 4 MiB, or one the <see cref="ITokenProtector"/> cannot decrypt reads as empty, and <see cref="SetAsync"/> and <see cref="RemoveAsync"/>
+/// throw <see cref="IOException"/> instead of replacing it: someone else may hold the data, or the key may be unavailable only for now.
+/// Delete the file to start over. File ownership is not checked (the platform API needs native calls this library does not make).
+/// </para>
 /// </summary>
 public sealed class FileTokenStore : ITokenStore, IDisposable
 {
@@ -191,15 +199,21 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
   private readonly string _path;
   private readonly ITokenProtector? _protector;
   private readonly SemaphoreSlim _gate = new(1, 1);
+  private readonly TimeProvider _time;
+
+  // A leftover temporary file older than this was abandoned by a crash.
+  private static readonly TimeSpan StaleTemporary = TimeSpan.FromMinutes(5);
 
   /// <summary>Creates a store.</summary>
   /// <param name="path">The file. Its directory is created when missing. Choose a location only the user can read.</param>
   /// <param name="protector">Seals the file contents; null stores them as JSON protected by file permissions alone.</param>
-  public FileTokenStore(string path, ITokenProtector? protector = null)
+  /// <param name="timeProvider">The clock used to recognise abandoned temporary files; null for the system clock.</param>
+  public FileTokenStore(string path, ITokenProtector? protector = null, TimeProvider? timeProvider = null)
   {
     ArgumentException.ThrowIfNullOrEmpty(path);
     _path = Path.GetFullPath(path);
     _protector = protector;
+    _time = timeProvider ?? TimeProvider.System;
   }
 
   /// <summary>Releases the store.</summary>
@@ -212,7 +226,7 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
     await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
     try
     {
-      return (await LoadAsync(cancellationToken).ConfigureAwait(false)).GetValueOrDefault(key);
+      return (await LoadAsync(cancellationToken).ConfigureAwait(false)).Entries.GetValueOrDefault(key);
     }
     finally
     {
@@ -228,7 +242,8 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
     await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
     try
     {
-      var all = await LoadAsync(cancellationToken).ConfigureAwait(false);
+      var (all, problem) = await LoadAsync(cancellationToken).ConfigureAwait(false);
+      RefuseOverwrite(problem);
       all[key] = record;
       await SaveAsync(all, cancellationToken).ConfigureAwait(false);
     }
@@ -245,7 +260,8 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
     await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
     try
     {
-      var all = await LoadAsync(cancellationToken).ConfigureAwait(false);
+      var (all, problem) = await LoadAsync(cancellationToken).ConfigureAwait(false);
+      RefuseOverwrite(problem);
       if (all.Remove(key))
       {
         await SaveAsync(all, cancellationToken).ConfigureAwait(false);
@@ -257,12 +273,28 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
     }
   }
 
-  private async Task<Dictionary<string, TokenRecord>> LoadAsync(CancellationToken cancellationToken)
+  private static void RefuseOverwrite(string? problem)
+  {
+    if (problem is not null)
+    {
+      throw new IOException("The token store was not changed: " + problem);
+    }
+  }
+
+  // The second value is why the file may not be replaced, or null. An unreadable store reads as empty (the user signs in again), but
+  // only a store we positively know is ours and merely out of date is ever written over.
+  private async Task<(Dictionary<string, TokenRecord> Entries, string? Problem)> LoadAsync(CancellationToken cancellationToken)
   {
     var result = new Dictionary<string, TokenRecord>(StringComparer.Ordinal);
     if (!File.Exists(_path))
     {
-      return result;
+      return (result, null);
+    }
+
+    if (!OperatingSystem.IsWindows() && (File.GetUnixFileMode(_path) & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
+    {
+      // Anyone who can write the file could have planted records in it (a token for a server of their choosing).
+      return (result, "the file is writable by its group or by others, so its content is not trusted. Remove it or run chmod 600 on it.");
     }
 
     byte[] bytes;
@@ -270,7 +302,7 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
     {
       if (stream.Length > MaxFileBytes)
       {
-        return result;
+        return (result, "the file is larger than a token store should be.");
       }
 
       bytes = new byte[stream.Length];
@@ -283,7 +315,15 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
       {
         bytes = _protector.Unprotect(bytes);
       }
+    }
+    catch (System.Security.Cryptography.CryptographicException)
+    {
+      // The key may be unavailable for now (a locked keychain); writing would destroy tokens that are still good.
+      return (result, "the file could not be decrypted with the protector in use, and replacing it would lose what it holds.");
+    }
 
+    try
+    {
       using var document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 8 });
       if (document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("entries", out var entries) && entries.ValueKind == JsonValueKind.Object)
       {
@@ -296,13 +336,13 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
         }
       }
     }
-    catch (Exception ex) when (ex is JsonException or System.Security.Cryptography.CryptographicException)
+    catch (JsonException)
     {
-      // An unreadable store is an empty store: the user signs in again. The content is never put in a message.
+      // Not a store at all: treated as empty and replaced by the next write. The content is never put in a message.
       result.Clear();
     }
 
-    return result;
+    return (result, null);
   }
 
   private async Task SaveAsync(Dictionary<string, TokenRecord> all, CancellationToken cancellationToken)
@@ -351,6 +391,7 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
       options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
     }
 
+    RemoveAbandonedTemporaries(directory);
     try
     {
       await using (var stream = new FileStream(temporary, options))
@@ -367,12 +408,32 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
       {
         File.Delete(temporary);
       }
-      catch (IOException)
+      catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
       {
         // Nothing more to do for a temporary file that cannot be removed.
       }
 
       throw;
+    }
+  }
+
+  // A crash between creating the temporary file and moving it leaves a file with the secrets in it. Sweep those of this store.
+  private void RemoveAbandonedTemporaries(string directory)
+  {
+    try
+    {
+      var now = _time.GetUtcNow();
+      foreach (var file in Directory.EnumerateFiles(directory, Path.GetFileName(_path) + ".*.tmp"))
+      {
+        if (now - new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero) > StaleTemporary)
+        {
+          File.Delete(file);
+        }
+      }
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+      // A sweep that fails leaves the old files for the next write.
     }
   }
 }
