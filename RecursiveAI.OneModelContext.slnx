@@ -9,4 +9,7 @@
     <Project Path="tests/RecursiveAI.OneModelContext.AotSmoke/RecursiveAI.OneModelContext.AotSmoke.csproj" />
     <Project Path="tests/RecursiveAI.OneModelContext.LegacyStdio/RecursiveAI.OneModelContext.LegacyStdio.csproj" />
   </Folder>
+  <Folder Name="/conformance/">
+    <Project Path="conformance/Server/RecursiveAI.OneModelContext.ConformanceServer.csproj" />
+  </Folder>
 </Solution>

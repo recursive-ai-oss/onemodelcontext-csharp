@@ -41,6 +41,9 @@ internal sealed class HttpSession : IServerSink, IDisposable
 
   internal string Id { get; }
 
+  /// <summary>The registration that lets the server notify this session outside a request; ended with the session.</summary>
+  internal IDisposable? Attachment { get; set; }
+
   internal ServerSessionState State { get; }
 
   /// <summary>Cancelled when the session ends (DELETE, expiry or shutdown); linked into every handler of the session.</summary>
@@ -191,6 +194,7 @@ internal sealed class HttpSession : IServerSink, IDisposable
 
   public void Dispose()
   {
+    Attachment?.Dispose();
     try
     {
       _closed.Cancel();

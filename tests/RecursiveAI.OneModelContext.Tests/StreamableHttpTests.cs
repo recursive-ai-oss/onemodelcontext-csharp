@@ -827,14 +827,16 @@ public class StreamableHttpTests
   public async Task The_standalone_get_stream_receives_session_notifications_and_keep_alive_comments()
   {
     var clock = new ManualTimeProvider();
-    var (server, endpoint) = Create(new StreamableHttpOptions { KeepAliveInterval = TimeSpan.FromSeconds(15) }, clock);
+    // The real legacy codec attaches the session for list-changed notifications.
+    var server = new ContextServer("real", "1", new ContextServerOptions { TimeProvider = clock });
+    server.Tools.Add(new ToolDefinition("echo", "Echoes.", ObjectSchema), (_, _) => ValueTask.FromResult(CallToolResult.FromText("ok")));
+    using var endpoint = new StreamableHttpEndpoint(server, new StreamableHttpOptions { KeepAliveInterval = TimeSpan.FromSeconds(15) });
     var session = await OpenSessionAsync(endpoint);
     var get = new TestExchange("GET", headers: [("Accept", "text/event-stream"), ("Mcp-Session-Id", session)]).Run(endpoint);
     await get.HeadersSent;
     var events = get.Events();
-    var sessionState = GetState(server, endpoint, session);
 
-    await sessionState.SendNotificationAsync(new JsonRpcNotification("notifications/tools/list_changed"), CancellationToken.None);
+    server.Tools.Add(new ToolDefinition("late", "Added later.", ObjectSchema), (_, _) => ValueTask.FromResult(CallToolResult.FromText("x")));
     var note = await events.NextAsync();
     clock.Advance(TimeSpan.FromSeconds(16));
     var comment = await events.NextAsync();
@@ -844,15 +846,6 @@ public class StreamableHttpTests
     Assert.True(comment!.IsComment);
     get.Disconnect();
     await get.Completed.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-  }
-
-  private static IServerSink GetState(ContextServer server, StreamableHttpEndpoint endpoint, string session)
-  {
-    // The sink a codec would find in the session state.
-    var field = typeof(StreamableHttpEndpoint).GetField("_sessions", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
-    var sessions = (System.Collections.IDictionary)field.GetValue(endpoint)!;
-    var state = (ServerSessionState)sessions[session]!.GetType().GetProperty("State", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(sessions[session])!;
-    return (IServerSink)state.Items[StreamableHttpEndpoint.SessionSinkKey];
   }
 
   [Fact]

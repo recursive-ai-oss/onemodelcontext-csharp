@@ -337,7 +337,6 @@ public sealed class StreamableHttpEndpoint : IDisposable
       session = new HttpSession(_options, _time, _server.Options.RequestTimeout);
       created = true;
       state = session.State;
-      state.Items[SessionSinkKey] = session;
     }
     else if (sessionHeader is null)
     {
@@ -394,6 +393,7 @@ public sealed class StreamableHttpEndpoint : IDisposable
         if (created && response is JsonRpcResultResponse && session is not null)
         {
           _sessions[session.Id] = session;
+          session.Attachment = _server.Attach(session.State, session);
         }
         else if (created)
         {
@@ -734,12 +734,6 @@ public sealed class StreamableHttpEndpoint : IDisposable
   }
 
   // ---- Sessions --------------------------------------------------------------------------------------------------------------
-
-  /// <summary>
-  /// The key under which a legacy session's <see cref="ServerSessionState.Items"/> holds an <see cref="IServerSink"/> that sends to the
-  /// session's standalone GET stream, for notifications that belong to no request (subscription updates, list changes).
-  /// </summary>
-  public const string SessionSinkKey = "RecursiveAI.OneModelContext.Http.SessionSink";
 
   private void Sweep()
   {
