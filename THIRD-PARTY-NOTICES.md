@@ -11,4 +11,4 @@ Build and test tooling used by this repository, none of which is distributed in 
   process; nothing from it is copied into this repository. Its licence is recorded in `conformance/README.md`.
 
 The adapter packages reference one library each, as a package dependency (nothing is copied into them). `RecursiveAI.OneModelContext.EntityFrameworkCore`
-references `Microsoft.EntityFrameworkCore` and `Microsoft.EntityFrameworkCore.Relational` (MIT); its tests use `Microsoft.EntityFrameworkCore.Sqlite` (MIT).
+references `Microsoft.EntityFrameworkCore` and `Microsoft.EntityFrameworkCore.Relational` (MIT); its tests use `Microsoft.EntityFrameworkCore.Sqlite` (MIT). `RecursiveAI.OneModelContext.OneLite` references `RecursiveAI.OneLite` (MIT OR Apache-2.0), another Recursive AI library.
