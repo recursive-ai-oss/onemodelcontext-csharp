@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using RecursiveAI.OneModelContext.OAuth;
 using RecursiveAI.OneModelContext.Protocol;
 
 namespace RecursiveAI.OneModelContext.Cli;
@@ -40,11 +41,18 @@ internal sealed partial class CliApp(TextWriter output, TextWriter error, TextRe
       onemodelcontext call <server> <tool> [--arg k=v]... [--json @file | --args '{...}']
       onemodelcontext read <server> <uri>
       onemodelcontext prompt <server> <name> [--arg k=v]...
+      onemodelcontext login <url> [--client-id ID|https-metadata-url] [--client-secret S|@file] [--no-browser] [--redirect-port P]
+      onemodelcontext logout <url>
       onemodelcontext proxy <server> [--listen [host:]port] [--token T] [--allow-non-loopback] [--allow-origin O]... [--allow-host H]... [--path /mcp]
 
     proxy serves one upstream across one hop: a stdio command is served over HTTP (loopback unless --allow-non-loopback, which
     also requires --token), and an http(s) URL is served on this process's stdin and stdout. --token T or --token @file makes
     HTTP callers send "Authorization: Bearer T".
+
+    login signs in to an http(s) server with OAuth 2.1 (PKCE) through a browser and a loopback redirect, and keeps the tokens in
+    the per-user onemodelcontext/tokens.json (--token-store FILE; owner-only permissions). The other commands then use, refresh and
+    widen them by themselves. logout forgets them. --client-id with an https URL names a client ID metadata document; otherwise it is a
+    pre-registered client id (without it the server's dynamic registration is tried).
 
     <server> is a command line ("npx -y some-server"), an http(s) URL, or a name in the config file.
     The config file is --config, ./onemodelcontext.json or the per-user onemodelcontext/config.json:
@@ -55,7 +63,8 @@ internal sealed partial class CliApp(TextWriter output, TextWriter error, TextRe
       --json                     print JSON (also --output json); with a value (@file or '{...}') it gives call arguments
       --arg k=v, -a k=v          a tool or prompt argument; typed from the tool's input schema
       --yes, -y                  answer yes when a server asks to confirm
-      --bearer T|@file           bearer token for an http(s) server (sent as a header, never in the URL)
+      --bearer T|@file           bearer token for an http(s) server (sent as a header, never in the URL); overrides stored tokens
+      --token-store FILE         where login keeps tokens
       --verbose, -v              show the server process's standard error
       --config FILE              server names file
       -h, --help   --version
@@ -85,16 +94,14 @@ internal sealed partial class CliApp(TextWriter output, TextWriter error, TextRe
 
     int needed = o.Command switch
     {
-      "inspect" or "proxy" => 1,
+      "inspect" or "proxy" or "login" or "logout" => 1,
       "read" or "prompt" => 2,
       "call" => 2,
       _ => -1,
     };
     if (needed < 0)
     {
-      return o.Command is "login" or "logout"
-        ? await FailUsageAsync("'" + o.Command + "' is not available in this build.").ConfigureAwait(false)
-        : await FailUsageAsync("unknown command '" + o.Command + "'.").ConfigureAwait(false);
+      return await FailUsageAsync("unknown command '" + o.Command + "'.").ConfigureAwait(false);
     }
 
     if (o.Positional.Count != needed)
@@ -110,6 +117,8 @@ internal sealed partial class CliApp(TextWriter output, TextWriter error, TextRe
         "call" => await CallAsync(o, cancellationToken).ConfigureAwait(false),
         "read" => await ReadAsync(o, cancellationToken).ConfigureAwait(false),
         "prompt" => await PromptAsync(o, cancellationToken).ConfigureAwait(false),
+        "login" => await LoginAsync(o, cancellationToken).ConfigureAwait(false),
+        "logout" => await LogoutAsync(o, cancellationToken).ConfigureAwait(false),
         _ => await ProxyAsync(o, cancellationToken).ConfigureAwait(false),
       };
     }
@@ -121,9 +130,13 @@ internal sealed partial class CliApp(TextWriter output, TextWriter error, TextRe
     {
       return await FailUsageAsync(ex.Message).ConfigureAwait(false);
     }
-    catch (Exception ex) when (ex is ContextException or NotSupportedException or IOException)
+    catch (Exception ex) when (ex is ContextException or NotSupportedException or IOException or OAuthException)
     {
       return await FailAsync(ex).ConfigureAwait(false);
+    }
+    finally
+    {
+      DisposeAuth();
     }
   }
 
@@ -137,6 +150,12 @@ internal sealed partial class CliApp(TextWriter output, TextWriter error, TextRe
   // and library errors scrub theirs. A connection that fails negotiation wraps the cause (for HTTP, the status line), so show that too.
   private async Task<int> FailAsync(Exception ex)
   {
+    if (FindAuthFailure(ex) is { } auth)
+    {
+      await error.WriteLineAsync("onemodelcontext: " + auth).ConfigureAwait(false);
+      return ExitCode.Auth;
+    }
+
     var detail = ex.InnerException is { } inner && !ex.Message.Contains(inner.Message, StringComparison.Ordinal) ? " " + inner.Message : "";
     var text = ex.Message + detail;
 
@@ -163,15 +182,18 @@ internal sealed partial class CliApp(TextWriter output, TextWriter error, TextRe
     {
       // The credential goes in a header added to each request, never in the URL; the transport sends it to this origin only.
       var bearer = o.Bearer is null ? null : o.Bearer.StartsWith('@') ? (await File.ReadAllTextAsync(o.Bearer[1..], cancellationToken).ConfigureAwait(false)).Trim() : o.Bearer;
+      var stored = bearer is null ? StoredCredentials(o, url) : null;
       var httpOptions = new HttpTransportOptions
       {
-        AuthorizeRequest = bearer is null
-          ? null
-          : (request, _) =>
+        // Stored tokens are refreshed here; when the server still refuses them it answers 401 or 403 and the command ends with exit 4
+        // (signing in again needs a person, which only login does).
+        AuthorizeRequest = bearer is not null
+          ? (request, _) =>
           {
             request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + bearer);
             return ValueTask.CompletedTask;
-          },
+          }
+          : stored is null ? null : (request, token) => stored.AuthorizeRequestAsync(request, token),
       };
       if (!Uri.TryCreate(url, UriKind.Absolute, out var endpoint))
       {
