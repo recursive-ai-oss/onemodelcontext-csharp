@@ -14,6 +14,8 @@ namespace RecursiveAI.OneModelContext.Wire.Modern;
 /// </summary>
 internal sealed class ModernServerCodec : IServerCodec
 {
+  private readonly RequestMetadataCache _metadata = new();
+
   public ProtocolEra Era => ProtocolEra.Modern;
 
   public ValueTask<ServerRequestDecision> BeginRequestAsync(JsonRpcRequest request, ServerSessionState session, IServerHost host, CancellationToken cancellationToken) =>
@@ -90,7 +92,7 @@ internal sealed class ModernServerCodec : IServerCodec
       return Reject(request, JsonRpcErrorCodes.InvalidParams, "Invalid params: _meta must carry " + WireNames.MetaClientCapabilities + ".");
     }
 
-    var meta = metaElement.Deserialize(WireJsonContext.Default.MetaObject)!;
+    var meta = _metadata.Read(metaElement);
     // The meta record already decoded the capabilities member; decoding it again would repeat the work on every request.
     var capabilities = meta.ClientCapabilities ?? capabilitiesElement.Deserialize(WireJsonContext.Default.ClientCapabilities)!;
 

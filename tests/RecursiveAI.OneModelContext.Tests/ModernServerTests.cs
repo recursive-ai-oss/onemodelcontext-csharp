@@ -632,6 +632,40 @@ public class ModernServerTests
     Assert.NotNull(server);
   }
 
+  [Theory]
+  [InlineData("", true)]
+  [InlineData(",\"future\":{\"value\":1}", true)]
+  [InlineData(",\"name\":\"t\"", true)]
+  [InlineData(",\"name\":42,\"name\":\"t\"", false)]
+  [InlineData(",\"requestState\":42", false)]
+  public async Task Tool_call_common_shape_and_record_fallback_keep_validation(string extra, bool valid)
+  {
+    var server = NewServer();
+    JsonElement saved = default;
+    server.Tools.Add(new ToolDefinition("t", "", ObjectSchema), (args, ctx) =>
+    {
+      saved = args;
+      Assert.Equal("wire", ctx.ClientInfo!.Name);
+      Assert.Equal("kept", ctx.Peer.Meta!.AdditionalProperties!["vendor/key"].GetString());
+      return ValueTask.FromResult(CallToolResult.FromText("ok"));
+    });
+    var wire = new ModernWire(server);
+    var reply = await wire.RawAsync("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{" +
+      "\"name\":\"t\",\"arguments\":{\"nested\":{\"value\":7}},\"_meta\":{" +
+      "\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{}," +
+      "\"io.modelcontextprotocol/clientInfo\":{\"name\":\"wire\",\"version\":\"1\"},\"vendor/key\":\"kept\"}" + extra + "}}");
+    if (valid)
+    {
+      Assert.True(reply.TryGetProperty("result", out _));
+      Assert.Equal(7, saved.GetProperty("nested").GetProperty("value").GetInt32());
+    }
+    else
+    {
+      Assert.Equal(-32602, reply.GetProperty("error").GetProperty("code").GetInt32());
+      Assert.Equal(JsonValueKind.Undefined, saved.ValueKind);
+    }
+  }
+
   // ---- logging, progress, trace context ----
 
   [Fact]

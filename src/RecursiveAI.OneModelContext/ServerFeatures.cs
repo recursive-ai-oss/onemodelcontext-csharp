@@ -42,7 +42,7 @@ internal sealed class ServerFeatures(ContextServer server)
       case Methods.ToolsList:
         return ListTools(Read(parameters, WireJsonContext.Default.PaginatedRequestParams), context);
       case Methods.ToolsCall:
-        return await CallToolAsync(Read(parameters, WireJsonContext.Default.CallToolRequestParams), context).ConfigureAwait(false);
+        return await CallToolAsync(ReadToolCall(parameters, context), context).ConfigureAwait(false);
       case Methods.ResourcesList:
         return ListResources(Read(parameters, WireJsonContext.Default.PaginatedRequestParams));
       case Methods.ResourcesTemplatesList:
@@ -178,6 +178,54 @@ internal sealed class ServerFeatures(ContextServer server)
     {
       throw new ProtocolException(JsonRpcErrorCodes.InvalidParams, "Invalid params.");
     }
+  }
+
+  private static CallToolRequestParams ReadToolCall(JsonElement parameters, RequestContext context)
+  {
+    // The modern codec has already validated _meta. Avoid decoding that identity a second time for the common call shape.
+    // Other shapes use the record reader, preserving its validation of duplicate members and future fields.
+    if (context.Era == ProtocolEra.Modern && context.Peer.Meta is not null && parameters.ValueKind == JsonValueKind.Object)
+    {
+      string? name = null;
+      JsonElement arguments = default;
+      var seen = 0;
+      foreach (var property in parameters.EnumerateObject())
+      {
+        int bit;
+        if (property.NameEquals("name") && property.Value.ValueKind == JsonValueKind.String)
+        {
+          bit = 1;
+          name = property.Value.GetString();
+        }
+        else if (property.NameEquals("arguments"))
+        {
+          bit = 2;
+          arguments = property.Value;
+        }
+        else if (property.NameEquals("_meta"))
+        {
+          bit = 4;
+        }
+        else
+        {
+          return Read(parameters, WireJsonContext.Default.CallToolRequestParams);
+        }
+
+        if ((seen & bit) != 0)
+        {
+          return Read(parameters, WireJsonContext.Default.CallToolRequestParams);
+        }
+
+        seen |= bit;
+      }
+
+      if (name is not null)
+      {
+        return new CallToolRequestParams { Name = name, Arguments = arguments, Meta = context.Peer.Meta };
+      }
+    }
+
+    return Read(parameters, WireJsonContext.Default.CallToolRequestParams);
   }
 
   private ListToolsResult ListTools(PaginatedRequestParams request, RequestContext context)
