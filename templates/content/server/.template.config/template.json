@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Recursive AI, LLC",
+  "classifications": [ "Console", "Model Context Protocol", "Server" ],
+  "identity": "RecursiveAI.OneModelContext.Templates.Server",
+  "name": "OneModelContext server",
+  "description": "A Model Context Protocol server with source-generated tools, over stdio or HTTP. Trim- and NativeAOT-safe.",
+  "shortName": "onemodelcontext-server",
+  "sourceName": "OneModelContextServer",
+  "preferNameDirectory": true,
+  "tags": { "language": "C#", "type": "project" },
+  "symbols": {
+    "transport": {
+      "type": "parameter",
+      "datatype": "choice",
+      "choices": [
+        { "choice": "stdio", "description": "Standard input and output, for a client that starts the server." },
+        { "choice": "http", "description": "Streamable HTTP on the built-in listener, loopback by default." }
+      ],
+      "defaultValue": "stdio",
+      "description": "How clients reach the server."
+    },
+    "libraryVersion": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "0.1.0-dev",
+      "replaces": "LIBRARY_VERSION",
+      "description": "The RecursiveAI.OneModelContext package version to reference."
+    },
+    "isHttp": { "type": "computed", "value": "transport == \"http\"" }
+  },
+  "primaryOutputs": [ { "path": "OneModelContextServer.csproj" } ]
+}

@@ -79,7 +79,7 @@ else (records, other collections, dictionaries). Enums are matched by name witho
 | enum | its member name |
 | record, class, dictionary | structured content, the same JSON as a text block, and an `outputSchema` |
 
-`Task<T>` and `ValueTask<T>` are unwrapped.
+`Task<T>` and `ValueTask<T>` are unwrapped. A nullable object return (`Note?`) keeps `"type":"object"` in its `outputSchema` (every revision before 2026-07-28 requires an object); a null result is sent as the text `null` with no `structuredContent`.
 
 **Errors.** A missing, unknown, null or wrongly typed argument is a tool execution error (an `isError` result whose text names the argument,
 for example `Argument 'items[2].qty' is not valid.`), because the tools specification asks for input validation errors to be fixable by

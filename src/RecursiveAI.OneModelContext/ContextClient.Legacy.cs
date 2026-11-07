@@ -24,6 +24,7 @@ public sealed partial class ContextClient
   /// <param name="cancellationToken">Cancels the call.</param>
   /// <remarks>Messages arrive through <see cref="NotificationReceived"/> as <c>notifications/message</c>.</remarks>
   /// <exception cref="ContextException">The connection negotiated 2026-07-28; send the level with each request there.</exception>
+  [Obsolete(DeprecatedFeatures.Logging, DiagnosticId = DeprecatedFeatures.LoggingId)]
   public async ValueTask SetLoggingLevelAsync(string level, CancellationToken cancellationToken = default)
   {
     ArgumentNullException.ThrowIfNull(level);
@@ -54,6 +55,7 @@ public sealed partial class ContextClient
 
   /// <summary>Tells the server the client's roots changed (<c>notifications/roots/list_changed</c>). Legacy revisions only; does nothing on modern.</summary>
   /// <param name="cancellationToken">Cancels the send.</param>
+  [Obsolete(DeprecatedFeatures.Roots, DiagnosticId = DeprecatedFeatures.RootsId)]
   public ValueTask NotifyRootsListChangedAsync(CancellationToken cancellationToken = default) =>
     Era == ProtocolEra.Legacy ? _rpc.SendNotificationAsync(Methods.NotificationsRootsListChanged, default, cancellationToken) : ValueTask.CompletedTask;
 

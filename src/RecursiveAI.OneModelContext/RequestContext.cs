@@ -193,6 +193,7 @@ public sealed partial class RequestContext
   /// <param name="request">The sampling request.</param>
   /// <returns>The client's answer.</returns>
   /// <exception cref="MissingCapabilityException">The client cannot sample.</exception>
+  [Obsolete(DeprecatedFeatures.Sampling, DiagnosticId = DeprecatedFeatures.SamplingId)]
   public async ValueTask<CreateMessageResult> SampleAsync(CreateMessageRequestParams request)
   {
     ArgumentNullException.ThrowIfNull(request);
@@ -209,6 +210,7 @@ public sealed partial class RequestContext
   /// <summary>Asks the client for its roots. Deprecated by 2026-07-28; the same call works on every revision.</summary>
   /// <returns>The client's roots.</returns>
   /// <exception cref="MissingCapabilityException">The client cannot list roots.</exception>
+  [Obsolete(DeprecatedFeatures.Roots, DiagnosticId = DeprecatedFeatures.RootsId)]
   public async ValueTask<ListRootsResult> ListRootsAsync()
   {
     if (ClientCapabilities.Roots is null)
@@ -242,6 +244,7 @@ public sealed partial class RequestContext
   /// <param name="level">One of <see cref="LoggingLevels"/>.</param>
   /// <param name="message">The text.</param>
   /// <param name="logger">The logger name.</param>
+  [Obsolete(DeprecatedFeatures.Logging, DiagnosticId = DeprecatedFeatures.LoggingId)]
   public ValueTask LogAsync(string level, string message, string? logger = null)
   {
     ArgumentNullException.ThrowIfNull(level);

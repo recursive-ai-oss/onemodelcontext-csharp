@@ -1,10 +1,11 @@
 using RecursiveAI.OneModelContext;
+using RecursiveAI.OneModelContext.AspNetCore;
 using RecursiveAI.OneModelContext.Hosting;
 using RecursiveAI.OneModelContext.Http;
 using RecursiveAI.OneModelContext.ConformanceServer;
 
-// conformance-server --http [--port N]   serve Streamable HTTP on 127.0.0.1 (port 0 picks a free one and prints it)
-// conformance-server --listener [--port N]   the same endpoint on the library's built-in HTTP/1.1 listener instead of Kestrel
+// conformance-server --http [--port N]   serve Streamable HTTP on 127.0.0.1 through MapModelContext (port 0 picks a free one and prints it)
+// conformance-server --listener [--port N]   the same endpoint on the library's built-in HTTP/1.1 listener instead
 // conformance-server --stdio             serve newline-delimited JSON-RPC on standard input and output
 var stdio = args.Contains("--stdio");
 var server = ConformanceContent.Create();
@@ -38,8 +39,7 @@ builder.Logging.ClearProviders();
 // Loopback only: the suite and the interop drivers run on the same machine.
 builder.WebHost.UseUrls("http://127.0.0.1:" + port.ToString(System.Globalization.CultureInfo.InvariantCulture));
 var app = builder.Build();
-using var endpoint = new StreamableHttpEndpoint(server);
-app.Map("/mcp", async context => await endpoint.HandleAsync(new KestrelExchange(context)));
+app.MapModelContext("/mcp", server);
 await app.StartAsync();
 var address = app.Urls.First();
 Console.WriteLine("listening " + address + "/mcp");

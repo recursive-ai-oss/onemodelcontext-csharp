@@ -44,15 +44,13 @@ if (i + 1 >= args.Length)
   return 2;
 }
 
-await using var server = ServerProcess.Start(args[i + 1], args[(i + 2)..]);
+// The command line is started as a child process and spoken to over its standard input and output; its standard error goes to the
+// library's diagnostics. Disposing the client ends the child. Setting a callback is all it takes to tell the server this client
+// can be asked, and the era is negotiated unless --era pins it.
+var console = new ConsoleElicitation(Console.In, Console.Out);
 try
 {
-  await using var client = await ContextClient.ConnectAsync(server.Transport, new ContextClientOptions
-  {
-    Era = era,
-    Capabilities = ConsoleElicitation.Capabilities,
-    RequestHandler = new ConsoleElicitation(Console.In, Console.Out),
-  });
+  await using var client = await ModelContext.ConnectAsync(CommandLine(args[(i + 1)..]), era, onConfirm: console.ConfirmAsync, onElicit: console.AskAsync);
   await Tour.RunAsync(client, request with { PromptArguments = promptArguments }, Console.Out);
   return 0;
 }
@@ -62,3 +60,7 @@ catch (ProtocolVersionException ex)
   Console.Error.WriteLine(ex.Message);
   return 1;
 }
+
+// ConnectAsync takes one command line (words split on spaces, quotes group); put back the quotes the shell took off.
+static string CommandLine(string[] words) =>
+  string.Join(' ', words.Select(w => w.Length > 0 && w.IndexOfAny([' ', '"', '\'']) < 0 ? w : '"' + w.Replace("\\", "\\\\").Replace("\"", "\\\"") + '"'));

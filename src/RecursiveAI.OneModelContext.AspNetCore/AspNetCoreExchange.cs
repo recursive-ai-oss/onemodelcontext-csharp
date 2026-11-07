@@ -1,23 +1,28 @@
+using System;
+using System.IO;
 using System.Net;
 using System.Security.Claims;
+using System.Threading;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using RecursiveAI.OneModelContext.Http;
 
-namespace RecursiveAI.OneModelContext.ConformanceServer;
+namespace RecursiveAI.OneModelContext.AspNetCore;
 
-/// <summary>Presents an ASP.NET Core request to <see cref="Hosting.StreamableHttpEndpoint"/>. Kestrel is only the test host here.</summary>
-internal sealed class KestrelExchange : IHttpExchange
+/// <summary>Presents an ASP.NET Core request to the host-agnostic Streamable HTTP endpoint.</summary>
+internal sealed class AspNetCoreExchange : IHttpExchange
 {
   private readonly HttpContext _context;
   private readonly Req _request;
   private readonly Res _response;
 
-  internal KestrelExchange(HttpContext context)
+  internal AspNetCoreExchange(HttpContext context)
   {
     _context = context;
     _request = new Req(context.Request);
     _response = new Res(context.Response);
+
+    // Event streams must reach the client as they are written, not when a buffer fills.
     context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
   }
 
@@ -25,8 +30,10 @@ internal sealed class KestrelExchange : IHttpExchange
 
   public IHttpResponse Response => _response;
 
+  // Only an authenticated identity counts as a caller; the framework's anonymous principal is not one.
   public ClaimsPrincipal? User => _context.User.Identity?.IsAuthenticated == true ? _context.User : null;
 
+  // RequestAborted fires when the client disconnects and when the server is shutting down.
   public CancellationToken Aborted => _context.RequestAborted;
 
   private sealed class Req : IHttpRequest
