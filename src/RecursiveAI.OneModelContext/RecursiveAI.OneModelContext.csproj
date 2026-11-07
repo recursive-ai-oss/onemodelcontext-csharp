@@ -36,6 +36,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="RecursiveAI.OneModelContext.Tests" />
+    <InternalsVisibleTo Include="RecursiveAI.OneModelContext.Fuzz" />
   </ItemGroup>
 
 </Project>

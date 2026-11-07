@@ -36,15 +36,19 @@ internal static class Program
     {
       foreach (var file in args.Skip(1))
       {
-        Console.WriteLine(file + ": " + Run(File.ReadAllBytes(file)));
+        Console.WriteLine(file + ": " + Dispatch(File.ReadAllBytes(file)));
       }
 
       return 0;
     }
 
-    Fuzzer.LibFuzzer.Run(span => Run(span));
+    Fuzzer.LibFuzzer.Run(span => Dispatch(span));
     return 0;
   }
+
+  // FUZZ_TARGET=listener selects the HTTP/1.1 parsers of the built-in listener instead of the Streamable HTTP endpoint.
+  private static int Dispatch(ReadOnlySpan<byte> data) =>
+    Environment.GetEnvironmentVariable("FUZZ_TARGET") == "listener" ? ListenerTarget.Run(data) : Run(data);
 
   private static ContextServer CreateServer()
   {
