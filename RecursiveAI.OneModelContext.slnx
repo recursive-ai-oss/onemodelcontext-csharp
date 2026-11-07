@@ -6,11 +6,17 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/RecursiveAI.OneModelContext.Tests/RecursiveAI.OneModelContext.Tests.csproj" />
+    <Project Path="tests/RecursiveAI.OneModelContext.SamplesTests/RecursiveAI.OneModelContext.SamplesTests.csproj" />
     <Project Path="tests/RecursiveAI.OneModelContext.AotSmoke/RecursiveAI.OneModelContext.AotSmoke.csproj" />
     <Project Path="tests/RecursiveAI.OneModelContext.TestServer/RecursiveAI.OneModelContext.TestServer.csproj" />
     <Project Path="tests/RecursiveAI.OneModelContext.LegacyStdio/RecursiveAI.OneModelContext.LegacyStdio.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/StdioServer/RecursiveAI.OneModelContext.Samples.StdioServer.csproj" />
+    <Project Path="samples/IndexedSearch/RecursiveAI.OneModelContext.Samples.IndexedSearch.csproj" />
+    <Project Path="samples/LiveControl/RecursiveAI.OneModelContext.Samples.LiveControl.csproj" />
+    <Project Path="samples/ToolBridge/RecursiveAI.OneModelContext.Samples.ToolBridge.csproj" />
+    <Project Path="samples/Explorer/RecursiveAI.OneModelContext.Samples.Explorer.csproj" />
+    <Project Path="samples/QuickPath/RecursiveAI.OneModelContext.Samples.QuickPath.csproj" />
   </Folder>
 </Solution>

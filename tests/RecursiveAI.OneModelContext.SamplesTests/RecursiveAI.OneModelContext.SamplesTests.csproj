@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Runs each consumer sample end to end: in memory, over a Unix socket and as a child process. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>RecursiveAI.OneModelContext.SamplesTests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext/RecursiveAI.OneModelContext.csproj" />
+    <ProjectReference Include="../../samples/IndexedSearch/RecursiveAI.OneModelContext.Samples.IndexedSearch.csproj" />
+    <ProjectReference Include="../../samples/LiveControl/RecursiveAI.OneModelContext.Samples.LiveControl.csproj" />
+    <ProjectReference Include="../../samples/ToolBridge/RecursiveAI.OneModelContext.Samples.ToolBridge.csproj" />
+    <ProjectReference Include="../../samples/Explorer/RecursiveAI.OneModelContext.Samples.Explorer.csproj" />
+    <ProjectReference Include="../../samples/QuickPath/RecursiveAI.OneModelContext.Samples.QuickPath.csproj" />
+  </ItemGroup>
+
+</Project>

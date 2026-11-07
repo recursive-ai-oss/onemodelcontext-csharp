@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>indexed-search</AssemblyName>
+    <RootNamespace>IndexedSearch</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!-- Pass -p:SmokeMode=aot to publish this server with NativeAOT. It is a project property, not PublishAot itself, because
+       global properties would flow into the generator project, which cannot be published natively. -->
+  <PropertyGroup Condition="'$(SmokeMode)' == 'aot'">
+    <PublishAot>true</PublishAot>
+    <RuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext/RecursiveAI.OneModelContext.csproj" />
+    <!-- A project that uses the NuGet package gets the generator with it; a project in this repository names it. -->
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext.Generator/RecursiveAI.OneModelContext.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>
