@@ -22,6 +22,13 @@ internal static class ConformanceContent
     AddTools(server);
     AddResources(server);
     AddPrompts(server);
+    // Suggests values that start with what was typed, from a fixed list.
+    server.Completions = (request, _) =>
+    {
+      string[] known = ["paris", "park", "party", "python", "pytorch"];
+      var matches = known.Where(k => k.StartsWith(request.Argument.Value, StringComparison.OrdinalIgnoreCase)).ToList();
+      return ValueTask.FromResult(new CompleteResult { Completion = new CompletionValues { Values = matches, Total = matches.Count, HasMore = false } });
+    };
     return server;
   }
 
@@ -87,6 +94,33 @@ internal static class ConformanceContent
       });
 
     server.Tools.Add(
+      new ToolDefinition("test_sampling", "Asks the client's model for a completion.", Parse("""{"type":"object","properties":{"prompt":{"type":"string","description":"The prompt to send."}},"required":["prompt"]}""")),
+      async (arguments, ctx) =>
+      {
+        var prompt = arguments.TryGetProperty("prompt", out var p) && p.ValueKind == JsonValueKind.String ? p.GetString()! : "";
+        var answer = await ctx.SampleAsync(new CreateMessageRequestParams
+        {
+          Messages = [new SamplingMessage { Role = "user", Content = [TextContent.Of(prompt)] }],
+          MaxTokens = 100,
+        });
+        var text = answer.Content.OfType<TextContent>().FirstOrDefault()?.Text ?? "";
+        return CallToolResult.FromText("LLM response: " + text);
+      });
+
+    AddElicitation(server, "test_elicitation", "Asks the user for a name and an email address.", """{"type":"object","properties":{"username":{"type":"string","description":"User's response"},"email":{"type":"string","description":"User's email address"}},"required":["username","email"]}""");
+
+    // Defaults for every primitive type (SEP-1034).
+    AddElicitation(server, "test_elicitation_sep1034_defaults", "Asks for values that all have defaults.", """{"type":"object","properties":{"name":{"type":"string","default":"John Doe"},"age":{"type":"integer","default":30},"score":{"type":"number","default":95.5},"status":{"type":"string","enum":["active","inactive","pending"],"default":"active"},"verified":{"type":"boolean","default":true}}}""");
+
+    // Every enum form (SEP-1330): untitled, titled, legacy enumNames, and the multi-select forms.
+    AddElicitation(server, "test_elicitation_sep1330_enums", "Asks for values using every enum form.", """{"type":"object","properties":{"untitledSingle":{"type":"string","enum":["option1","option2","option3"]},"titledSingle":{"type":"string","oneOf":[{"const":"value1","title":"First Option"},{"const":"value2","title":"Second Option"},{"const":"value3","title":"Third Option"}]},"legacyEnum":{"type":"string","enum":["opt1","opt2","opt3"],"enumNames":["Option One","Option Two","Option Three"]},"untitledMulti":{"type":"array","items":{"type":"string","enum":["option1","option2","option3"]}},"titledMulti":{"type":"array","items":{"anyOf":[{"const":"value1","title":"First Choice"},{"const":"value2","title":"Second Choice"},{"const":"value3","title":"Third Choice"}]}}}}""");
+
+    // A tool whose input schema uses 2020-12 keywords: $schema, $defs, $ref and additionalProperties.
+    server.Tools.Add(
+      new ToolDefinition("json_schema_2020_12_tool", "A tool whose schema uses JSON Schema 2020-12 keywords.", Parse("""{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","$defs":{"address":{"type":"object","properties":{"street":{"type":"string"},"city":{"type":"string"}}}},"properties":{"name":{"type":"string"},"address":{"$ref":"#/$defs/address"}},"additionalProperties":false}""")),
+      (_, _) => Text("JSON Schema 2020-12 tool executed"));
+
+    server.Tools.Add(
       new ToolDefinition("test_reconnection", "Closes its event stream and finishes later.", NoArguments),
       async (_, ctx) =>
       {
@@ -97,6 +131,20 @@ internal static class ConformanceContent
         }
 
         return CallToolResult.FromText("Reconnection test completed");
+      });
+  }
+
+  private static void AddElicitation(ContextServer server, string name, string description, string schema)
+  {
+    var requested = Parse(schema);
+    server.Tools.Add(
+      new ToolDefinition(name, description, Parse("""{"type":"object","properties":{"message":{"type":"string","description":"What to ask."}}}""")),
+      async (arguments, ctx) =>
+      {
+        var message = arguments.ValueKind == JsonValueKind.Object && arguments.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString()! : "Please provide values";
+        var answer = await ctx.ElicitAsync(message, requested);
+        var content = answer.Content is null ? "{}" : JsonSerializer.Serialize(answer.Content, ConformanceJson.Default.DictionaryStringJsonElement);
+        return CallToolResult.FromText("User response: action=" + answer.Action + ", content=" + content);
       });
   }
 
@@ -156,4 +204,5 @@ internal static class ConformanceContent
 }
 
 [System.Text.Json.Serialization.JsonSerializable(typeof(Dictionary<string, string>))]
+[System.Text.Json.Serialization.JsonSerializable(typeof(Dictionary<string, JsonElement>))]
 internal sealed partial class ConformanceJson : System.Text.Json.Serialization.JsonSerializerContext;

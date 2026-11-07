@@ -58,7 +58,9 @@ case "$cmd" in
     cd "$out"
     flag=$([ "$cmd" = server ] && echo --url || echo --command)
     name="$cmd-${selector[1]:-all}"
-    suite "$cmd" "$flag" "$target" "${selector[@]}" 2>&1 | tee "$out/${name//\//_}.log"
+    version=()
+    [ -n "${SPEC_VERSION:-}" ] && version=(--spec-version "$SPEC_VERSION")
+    suite "$cmd" "$flag" "$target" "${selector[@]}" "${version[@]}" 2>&1 | tee "$out/${name//\//_}.log"
     ;;
   regression)
     out=""; url=""; command=""
@@ -78,7 +80,8 @@ case "$cmd" in
       case "${side:-}" in ''|'#'*) continue ;; esac
       ran=$((ran + 1))
       if [ "$side" = server ]; then
-        "$HERE/run.sh" server --url "${url:?--url is needed for server scenarios}" --out "$out" --scenario "$scenario" || failed=$((failed + 1))
+        # The revision column picks the scenario's variant for that revision (--spec-version).
+        SPEC_VERSION="${revision:-}" "$HERE/run.sh" server --url "${url:?--url is needed for server scenarios}" --out "$out" --scenario "$scenario" || failed=$((failed + 1))
       else
         "$HERE/run.sh" client --command "${command:?--command is needed for client scenarios}" --out "$out" --scenario "$scenario" || failed=$((failed + 1))
       fi
