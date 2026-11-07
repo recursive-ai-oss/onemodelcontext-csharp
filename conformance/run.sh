@@ -5,7 +5,7 @@
 #   conformance/run.sh list                           print the suite's scenarios
 #   conformance/run.sh server --url URL --out DIR [--scenario NAME | --requirements REVISION]
 #   conformance/run.sh client --command CMD --out DIR [--scenario NAME | --requirements REVISION]
-#   conformance/run.sh regression --out DIR [--url URL] [--command CMD]
+#   conformance/run.sh regression --out DIR [--url URL] [--command CMD] [--only server|client]
 #                                                      run every scenario named in conformance/scenarios.txt
 #
 # ONEMODELCONTEXT_CONFORMANCE_CACHE must name a directory outside the repository; the suite is installed there, never in the tree.
@@ -63,10 +63,11 @@ case "$cmd" in
     suite "$cmd" "$flag" "$target" "${selector[@]}" "${version[@]}" 2>&1 | tee "$out/${name//\//_}.log"
     ;;
   regression)
-    out=""; url=""; command=""
+    out=""; url=""; command=""; only=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --out) out="$2"; shift 2 ;;
+        --only) only="$2"; shift 2 ;;
         --url) url="$2"; shift 2 ;;
         --command) command="$2"; shift 2 ;;
         *) die "unknown option $1" ;;
@@ -78,6 +79,7 @@ case "$cmd" in
     # Each line: side scenario revision. Blank lines and # comments are ignored.
     while read -r side scenario revision; do
       case "${side:-}" in ''|'#'*) continue ;; esac
+      [ -z "$only" ] || [ "$only" = "$side" ] || continue
       ran=$((ran + 1))
       if [ "$side" = server ]; then
         # The revision column picks the scenario's variant for that revision (--spec-version).

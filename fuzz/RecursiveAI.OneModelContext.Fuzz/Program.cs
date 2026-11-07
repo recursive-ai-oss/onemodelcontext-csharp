@@ -35,29 +35,28 @@ internal static class Program
 
   private static int Main(string[] args)
   {
-    var sse = Environment.GetEnvironmentVariable("FUZZ_TARGET") == "sse";
     if (args.Length > 0 && args[0] == "replay")
     {
       foreach (var file in args.Skip(1))
       {
-        var bytes = File.ReadAllBytes(file);
-        Console.WriteLine(file + ": " + (sse ? RunSse(bytes) : Run(bytes)));
+        Console.WriteLine(file + ": " + Dispatch(File.ReadAllBytes(file)));
       }
 
       return 0;
     }
 
-    if (sse)
-    {
-      Fuzzer.LibFuzzer.Run(span => RunSse(span));
-    }
-    else
-    {
-      Fuzzer.LibFuzzer.Run(span => Run(span));
-    }
-
+    Fuzzer.LibFuzzer.Run(span => Dispatch(span));
     return 0;
   }
+
+  // FUZZ_TARGET=listener selects the HTTP/1.1 parsers of the built-in listener, FUZZ_TARGET=sse the event-stream reader of the HTTP client;
+  // otherwise the Streamable HTTP endpoint.
+  private static int Dispatch(ReadOnlySpan<byte> data) => Environment.GetEnvironmentVariable("FUZZ_TARGET") switch
+  {
+    "listener" => ListenerTarget.Run(data),
+    "sse" => RunSse(data),
+    _ => Run(data),
+  };
 
   private static ContextServer CreateServer()
   {

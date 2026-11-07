@@ -26,6 +26,7 @@
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/StdioServer/RecursiveAI.OneModelContext.Samples.StdioServer.csproj" />
+    <Project Path="samples/HttpServer/RecursiveAI.OneModelContext.Samples.HttpServer.csproj" />
     <Project Path="samples/IndexedSearch/RecursiveAI.OneModelContext.Samples.IndexedSearch.csproj" />
     <Project Path="samples/LiveControl/RecursiveAI.OneModelContext.Samples.LiveControl.csproj" />
     <Project Path="samples/ToolBridge/RecursiveAI.OneModelContext.Samples.ToolBridge.csproj" />
