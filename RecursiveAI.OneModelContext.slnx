@@ -51,6 +51,7 @@
     <Project Path="samples/ToolBridge/RecursiveAI.OneModelContext.Samples.ToolBridge.csproj" />
     <Project Path="samples/Explorer/RecursiveAI.OneModelContext.Samples.Explorer.csproj" />
     <Project Path="samples/AspNetCoreServer/RecursiveAI.OneModelContext.Samples.AspNetCoreServer.csproj" />
+    <Project Path="samples/ProtectedServer/RecursiveAI.OneModelContext.Samples.ProtectedServer.csproj" />
     <Project Path="samples/HostedServer/RecursiveAI.OneModelContext.Samples.HostedServer.csproj" />
     <Project Path="samples/ChatTools/RecursiveAI.OneModelContext.Samples.ChatTools.csproj" />
     <Project Path="samples/QuickPath/RecursiveAI.OneModelContext.Samples.QuickPath.csproj" />

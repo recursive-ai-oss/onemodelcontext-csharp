@@ -53,3 +53,5 @@ Nothing here runs in continuous integration; it is run at milestones.
 - The official C# SDK server over HTTP asks the client for input only in its stateful mode (`Stateless = false`), which negotiates a legacy revision; stateless it answers elicitation with a tool error. The fixture server runs stateful.
 - A server that does not declare a capability is not asked for that list by the generic probe.
 - Python SDK `ctx.elicit` is a server-to-client request and exists only on legacy sessions; the fixture asks through the SDK's resolver, which works in both eras.
+
+Model Context Protocol® is a registered trademark of LF Projects, LLC. OneModelContext is an independent project and is not affiliated with or endorsed by LF Projects, LLC or the Model Context Protocol project.

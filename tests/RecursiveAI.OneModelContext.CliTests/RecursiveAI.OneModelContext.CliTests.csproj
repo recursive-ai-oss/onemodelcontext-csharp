@@ -17,6 +17,11 @@
   <ItemGroup>
     <ProjectReference Include="../../src/RecursiveAI.OneModelContext.Cli/RecursiveAI.OneModelContext.Cli.csproj" />
     <ProjectReference Include="../RecursiveAI.OneModelContext.TestServer/RecursiveAI.OneModelContext.TestServer.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../RecursiveAI.OneModelContext.LegacyStdio/RecursiveAI.OneModelContext.LegacyStdio.csproj" ReferenceOutputAssembly="false" />
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>LegacyServerDll</_Parameter1>
+      <_Parameter2>$(ArtifactsPath)/bin/RecursiveAI.OneModelContext.LegacyStdio/$(Configuration.ToLowerInvariant())/RecursiveAI.OneModelContext.LegacyStdio.dll</_Parameter2>
+    </AssemblyAttribute>
     <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
       <_Parameter1>TestServerDll</_Parameter1>
       <_Parameter2>$(ArtifactsPath)/bin/RecursiveAI.OneModelContext.TestServer/$(Configuration.ToLowerInvariant())/RecursiveAI.OneModelContext.TestServer.dll</_Parameter2>

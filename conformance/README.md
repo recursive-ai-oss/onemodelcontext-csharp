@@ -203,3 +203,5 @@ Authorization server scenarios (test against an authorization server):
   - authorization-server-metadata-endpoint [2025-03-26,2025-06-18,2025-11-25,2026-07-28]
   - authorization-code-grant [2025-03-26,2025-06-18,2025-11-25,2026-07-28]
 ```
+
+Model Context Protocol® is a registered trademark of LF Projects, LLC. OneModelContext is an independent project and is not affiliated with or endorsed by LF Projects, LLC or the Model Context Protocol project.
