@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="xunit.v3" Version="4.0.2" />
+  </ItemGroup>
+  <!-- Roslyn, build time only, for the source generator. 4.8 is the compiler of the .NET 8 SDK; a generator built
+       against it loads in every later compiler. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />
+  </ItemGroup>
+</Project>

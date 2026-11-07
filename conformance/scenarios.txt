@@ -1,0 +1,3 @@
+# Scenarios the continuous integration job runs as regression: one per line, "side scenario revision".
+# side is "server" (run against a server over HTTP) or "client" (run against a client command).
+# Blank lines and lines starting with # are ignored. Empty for now: scenarios are added as the server and client that pass them land.

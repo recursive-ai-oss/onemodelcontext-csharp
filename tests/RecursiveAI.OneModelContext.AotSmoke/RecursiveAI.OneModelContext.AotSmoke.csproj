@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!-- CI and the local check pass SmokeMode=aot. It is a project property, not PublishAot itself, because global
+       properties flow into the generator project, which cannot be published natively. -->
+  <PropertyGroup Condition="'$(SmokeMode)' == 'aot'">
+    <PublishAot>true</PublishAot>
+    <RuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext/RecursiveAI.OneModelContext.csproj" />
+  </ItemGroup>
+
+</Project>

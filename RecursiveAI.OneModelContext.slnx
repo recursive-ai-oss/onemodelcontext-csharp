@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RecursiveAI.OneModelContext/RecursiveAI.OneModelContext.csproj" />
+    <Project Path="src/RecursiveAI.OneModelContext.Generator/RecursiveAI.OneModelContext.Generator.csproj" />
+    <Project Path="src/RecursiveAI.OneModelContext.Cli/RecursiveAI.OneModelContext.Cli.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RecursiveAI.OneModelContext.Tests/RecursiveAI.OneModelContext.Tests.csproj" />
+    <Project Path="tests/RecursiveAI.OneModelContext.AotSmoke/RecursiveAI.OneModelContext.AotSmoke.csproj" />
+  </Folder>
+</Solution>

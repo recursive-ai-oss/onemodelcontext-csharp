@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>$(PackagePrefix).OneModelContext</AssemblyName>
+    <RootNamespace>RecursiveAI.OneModelContext</RootNamespace>
+    <PackageId>$(PackagePrefix).OneModelContext</PackageId>
+    <IsPackable>true</IsPackable>
+    <IsTrimmable>true</IsTrimmable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <Description>OneModelContext: a .NET SDK for the Model Context Protocol®. Client and server for the 2026-07-28 revision and the legacy revisions back to 2024-11-05, over stdio and duplex streams, with a source generator for tools. Pre-release; unpublished. Unaffiliated with 1MCP, the Go OneMCP aggregator and the Model Context Protocol project.</Description>
+  </PropertyGroup>
+
+  <!-- The source generator is built first and ships inside this package as an analyzer, so adding the package is all it
+       takes. It is a build-time tool: it adds no dependency to the package. -->
+  <ItemGroup>
+    <ProjectReference Include="../RecursiveAI.OneModelContext.Generator/RecursiveAI.OneModelContext.Generator.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+  </ItemGroup>
+
+  <Target Name="IncludeGeneratorInPackage" BeforeTargets="_GetPackageFiles">
+    <!-- Packing with no build ships the generator the earlier build produced. -->
+    <MSBuild Projects="../RecursiveAI.OneModelContext.Generator/RecursiveAI.OneModelContext.Generator.csproj" Targets="Build" Condition="'$(NoBuild)' != 'true'" />
+    <MSBuild Projects="../RecursiveAI.OneModelContext.Generator/RecursiveAI.OneModelContext.Generator.csproj" Targets="GetTargetPath">
+      <Output TaskParameter="TargetOutputs" ItemName="_GeneratorAssembly" />
+    </MSBuild>
+    <ItemGroup>
+      <None Include="@(_GeneratorAssembly)" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="RecursiveAI.OneModelContext.Tests" />
+  </ItemGroup>
+
+</Project>

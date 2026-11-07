@@ -1,0 +1,36 @@
+# Allowlist: everything at the top level is ignored unless it is listed here, so a new
+# file stays out of the repository until someone deliberately adds it.
+/*
+!/.gitignore
+!/.gitattributes
+!/.editorconfig
+!/.github/
+!/global.json
+!/Directory.Build.props
+!/Directory.Build.targets
+!/Directory.Packages.props
+!/RecursiveAI.OneModelContext.slnx
+!/src/
+!/tests/
+!/conformance/
+!/docs/
+!/README.md
+!/PACKAGE.md
+!/CHANGELOG.md
+!/THIRD-PARTY-NOTICES.md
+!/LICENSE-APACHE
+!/LICENSE-MIT
+
+# Never commit these anywhere in the tree.
+bin/
+obj/
+artifacts/
+TestResults/
+*.nupkg
+*.snupkg
+node_modules
+core
+core.[0-9]*
+vgcore.*
+*.core
+*.dmp

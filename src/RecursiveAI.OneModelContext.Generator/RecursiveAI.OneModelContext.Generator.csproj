@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Roslyn loads generators into compilers that run on .NET Framework and .NET, so the generator targets
+         netstandard2.0. It ships inside the core package, not on its own. -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>$(PackagePrefix).OneModelContext.Generator</AssemblyName>
+    <RootNamespace>RecursiveAI.OneModelContext.Generator</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

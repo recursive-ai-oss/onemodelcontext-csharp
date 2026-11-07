@@ -1,0 +1,35 @@
+<Project>
+
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <!-- Shipped code only: deterministic paths in packages when CI builds them (tests use caller file paths). -->
+  <PropertyGroup>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <!-- Package metadata shared by every packable project. -->
+  <PropertyGroup>
+    <Authors>Recursive AI, LLC</Authors>
+    <Company>Recursive AI, LLC</Company>
+    <Copyright>Copyright (c) 2026 Recursive AI, LLC</Copyright>
+    <PackageLicenseExpression>MIT OR Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://recursiveai.org/onemodelcontext/</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/recursive-ai-oss/onemodelcontext-csharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>PACKAGE.md</PackageReadmeFile>
+    <PackageTags>mcp;model-context-protocol;sdk;json-rpc;client;server;stdio;aot</PackageTags>
+    <EnablePackageValidation>true</EnablePackageValidation>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)../PACKAGE.md" Pack="true" PackagePath="/" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)../LICENSE-MIT" Pack="true" PackagePath="/" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)../LICENSE-APACHE" Pack="true" PackagePath="/" Visible="false" />
+  </ItemGroup>
+
+</Project>

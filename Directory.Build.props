@@ -1,0 +1,32 @@
+<Project>
+
+  <!--
+    Build output stays out of the source tree. Set ArtifactsPath (environment variable or -p:ArtifactsPath=...)
+    to choose the output directory; otherwise it goes to an ignored artifacts/ directory in the repository.
+  -->
+  <PropertyGroup>
+    <UseArtifactsOutput>true</UseArtifactsOutput>
+    <ArtifactsPath Condition="'$(ArtifactsPath)' == ''">$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisMode>Recommended</AnalysisMode>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <Deterministic>true</Deterministic>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <NuGetAudit>true</NuGetAudit>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- One version for every package in the repository, and the package ID prefix written once. -->
+  <PropertyGroup>
+    <Version>0.1.0-dev</Version>
+    <PackagePrefix>RecursiveAI</PackagePrefix>
+  </PropertyGroup>
+
+</Project>
