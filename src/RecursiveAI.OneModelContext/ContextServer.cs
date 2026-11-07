@@ -42,6 +42,9 @@ public sealed class ContextServerOptions
   /// <summary>Limits applied to every incoming message.</summary>
   public JsonRpcReaderOptions ReaderOptions { get; init; } = new();
 
+  /// <summary>Most resources one legacy session may subscribe to with <c>resources/subscribe</c>; more get invalid params. Default 1000.</summary>
+  public int MaxSubscriptionsPerSession { get; init; } = 1000;
+
   /// <summary>
   /// Called once per request after it ends, with who asked, what, and how it ended (never arguments, results or tokens). It runs inline, so it
   /// should be quick; an exception it throws is reported as a diagnostic and otherwise ignored.
@@ -85,7 +88,7 @@ public sealed class ContextServerOptions
 /// await server.RunAsync(ContextTransport.Stdio());
 /// </code>
 /// </example>
-public sealed class ContextServer : IServerHost
+public sealed partial class ContextServer : IServerHost
 {
   private readonly IReadOnlyList<IServerCodec> _codecs;
   private readonly ServerFeatures _features;
@@ -102,10 +105,7 @@ public sealed class ContextServer : IServerHost
     _codecs = Options.Codecs ?? DefaultCodecs.Server();
     _features = new ServerFeatures(this);
     _stateProtector = new Wire.Modern.RequestStateProtector(Options.RequestStateKey, Options.EncryptRequestState, Options.RequestStateLifetime, Options.MaxRequestStateBytes, Options.TimeProvider);
-    Tools.Changed += (_, _) => Events.Raise(new ServerEvent(ServerEventKind.ToolsListChanged));
-    Prompts.Changed += (_, _) => Events.Raise(new ServerEvent(ServerEventKind.PromptsListChanged));
-    Resources.Changed += (_, _) => Events.Raise(new ServerEvent(ServerEventKind.ResourcesListChanged));
-    ResourceTemplates.Changed += (_, _) => Events.Raise(new ServerEvent(ServerEventKind.ResourcesListChanged));
+    HookListChanged();
   }
 
   /// <summary>Creates a server.</summary>
@@ -176,15 +176,6 @@ public sealed class ContextServer : IServerHost
 
   /// <summary>Tells clients that listen for it that the resource list changed. Registry changes do this by themselves.</summary>
   public void NotifyResourcesListChanged() => Events.Raise(new ServerEvent(ServerEventKind.ResourcesListChanged));
-
-  /// <summary>Tells the clients that subscribed to <paramref name="uri"/> (<c>resourceSubscriptions</c>) that the resource changed.</summary>
-  /// <param name="uri">The resource URI, exactly as the client subscribed to it.</param>
-  /// <exception cref="ArgumentNullException"><paramref name="uri"/> is null.</exception>
-  public void NotifyResourceUpdated(string uri)
-  {
-    ArgumentNullException.ThrowIfNull(uri);
-    Events.Raise(new ServerEvent(ServerEventKind.ResourceUpdated, uri));
-  }
 
   /// <summary>
   /// Ends every open <c>subscriptions/listen</c> stream the graceful way: each is answered with a final result, as the revision asks for

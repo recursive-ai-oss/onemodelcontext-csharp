@@ -727,8 +727,8 @@ public class ModernServerTests
 
     server.Prompts.Add(new PromptDefinition("later"), (_, _) => ValueTask.FromResult(new GetPromptResult { Messages = [] }));
     server.Tools.Add(new ToolDefinition("t2", "d", ObjectSchema), (_, _) => ValueTask.FromResult(CallToolResult.FromText("ok")));
-    server.NotifyResourceUpdated("mem://other");
-    server.NotifyResourceUpdated("mem://watched");
+    await server.NotifyResourceUpdatedAsync("mem://other", TestContext.Current.CancellationToken);
+    await server.NotifyResourceUpdatedAsync("mem://watched", TestContext.Current.CancellationToken);
     await WaitForAsync(() => sink.Notifications.Count >= 3);
     server.EndSubscriptions();
     var reply = await listening;

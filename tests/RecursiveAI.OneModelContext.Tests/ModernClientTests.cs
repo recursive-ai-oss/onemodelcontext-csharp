@@ -358,7 +358,7 @@ public class ModernClientTests
   {
     var server = new ContextServer("srv", "1", new ContextServerOptions { SupportedVersions = [ProtocolVersions.V20251125, ProtocolVersions.V20250618] });
 
-    var ex = await Assert.ThrowsAsync<ProtocolVersionException>(async () => await ConnectAsync(server));
+    var ex = await Assert.ThrowsAsync<ProtocolVersionException>(async () => await ConnectAsync(server, new ContextClientOptions { Era = EraPreference.Modern }));
 
     Assert.Contains("modern 2026-07-28", ex.Message, StringComparison.Ordinal);
     Assert.Contains("legacy 2025-11-25, 2025-06-18", ex.Message, StringComparison.Ordinal);
@@ -378,7 +378,7 @@ public class ModernClientTests
       await a.WriteAsync(System.Text.Encoding.UTF8.GetBytes(reply), TestContext.Current.CancellationToken);
     }, TestContext.Current.CancellationToken);
 
-    var ex = await Assert.ThrowsAsync<ProtocolVersionException>(async () => await ContextClient.ConnectAsync(ContextTransport.Stream(b), cancellationToken: TestContext.Current.CancellationToken));
+    var ex = await Assert.ThrowsAsync<ProtocolVersionException>(async () => await ContextClient.ConnectAsync(ContextTransport.Stream(b), new ContextClientOptions { Era = EraPreference.Modern }, TestContext.Current.CancellationToken));
     await peer;
 
     Assert.Empty(ex.Remote);
@@ -456,7 +456,7 @@ public class ModernClientTests
   {
     var (a, b) = PipeEnd.CreatePair();
     await using var zero = new HandServer(a, ttlMs: 0);
-    await using var client = await ContextClient.ConnectAsync(ContextTransport.Stream(b), cancellationToken: TestContext.Current.CancellationToken);
+    await using var client = await ContextClient.ConnectAsync(ContextTransport.Stream(b), new ContextClientOptions { Era = EraPreference.Modern }, TestContext.Current.CancellationToken);
     await client.ListToolsAsync(TestContext.Current.CancellationToken);
     await client.ListToolsAsync(TestContext.Current.CancellationToken);
     Assert.Equal(2, zero.ToolsListRequests);
@@ -474,7 +474,7 @@ public class ModernClientTests
   {
     var (a, b) = PipeEnd.CreatePair();
     await using var server = new HandServer(a, ttlMs: 600_000);
-    await using var client = await ContextClient.ConnectAsync(ContextTransport.Stream(b), cancellationToken: TestContext.Current.CancellationToken);
+    await using var client = await ContextClient.ConnectAsync(ContextTransport.Stream(b), new ContextClientOptions { Era = EraPreference.Modern }, TestContext.Current.CancellationToken);
     var heard = new TaskCompletionSource();
     client.NotificationReceived += n =>
     {
@@ -505,7 +505,7 @@ public class ModernClientTests
       var call = await lines.ReadJsonAsync();
       await a.WriteAsync(System.Text.Encoding.UTF8.GetBytes("{\"jsonrpc\":\"2.0\",\"id\":" + call.GetProperty("id").GetRawText() + ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"old\"}]}}\n"), TestContext.Current.CancellationToken);
     }, TestContext.Current.CancellationToken);
-    await using var client = await ContextClient.ConnectAsync(ContextTransport.Stream(b), cancellationToken: TestContext.Current.CancellationToken);
+    await using var client = await ContextClient.ConnectAsync(ContextTransport.Stream(b), new ContextClientOptions { Era = EraPreference.Modern }, TestContext.Current.CancellationToken);
 
     var result = await client.CallToolAsync("x", cancellationToken: TestContext.Current.CancellationToken);
     await peer;
