@@ -73,20 +73,50 @@ internal sealed partial class CliApp
     return client;
   }
 
-  private static PreRegisteredClient? PreRegistered(CliOptions o)
+  private PreRegisteredClient? PreRegistered(CliOptions o)
   {
     if (o.ClientId is not { Length: > 0 } id || IsMetadataUrl(id))
     {
       return null;
     }
 
-    string? secret = null;
-    if (o.ClientSecret is { } s)
+    var secret = ReadSecret(o.ClientSecret);
+    if (secret is not null && o.Issuer is not { Length: > 0 })
     {
-      secret = s.StartsWith('@') ? File.ReadAllText(s[1..]).Trim() : s;
+      // A secret goes only where the user said it belongs (the server's own metadata could name any authorization server).
+      throw new ArgumentException("--client-secret needs --issuer URL: the issuer of the authorization server that issued the client.");
     }
 
-    return new PreRegisteredClient(id, secret);
+    return new PreRegisteredClient(id, secret, o.Issuer is { Length: > 0 } issuer ? issuer : null);
+  }
+
+  // env:NAME, - (standard input), @file, the ONEMODELCONTEXT_CLIENT_SECRET variable when the option is absent, else the literal.
+  private string? ReadSecret(string? value)
+  {
+    string? secret;
+    if (value is null)
+    {
+      secret = Environment.GetEnvironmentVariable("ONEMODELCONTEXT_CLIENT_SECRET");
+    }
+    else if (value == "-")
+    {
+      secret = input.ReadLine();
+    }
+    else if (value.StartsWith("env:", StringComparison.Ordinal))
+    {
+      secret = Environment.GetEnvironmentVariable(value[4..]) ?? throw new ArgumentException("the environment variable " + value[4..] + " is not set.");
+    }
+    else if (value.StartsWith('@'))
+    {
+      secret = File.ReadAllText(value[1..]);
+    }
+    else
+    {
+      secret = value;
+    }
+
+    secret = secret?.Trim();
+    return string.IsNullOrEmpty(secret) ? null : secret;
   }
 
   private static bool IsMetadataUrl(string id) => id.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
@@ -94,8 +124,9 @@ internal sealed partial class CliApp
   private async Task<int> LoginAsync(CliOptions o, CancellationToken ct)
   {
     var resource = ResourceUri(o);
-    var store = new FileTokenStore(TokenFile(o));
-    _disposables.Add(store);
+    var real = new FileTokenStore(TokenFile(o));
+    _disposables.Add(real);
+    var store = new StagingTokenStore(real);
 
     // Registration order follows the authorization specification: a metadata document URL, then pre-registered credentials, then
     // whatever dynamic registration the server still offers.
@@ -114,8 +145,8 @@ internal sealed partial class CliApp
     _disposables.Add(client);
 
     // Signing in starts when the server first refuses the connection; a server that needs no authorization never does.
-    // A new sign-in replaces what is stored, so it also widens access: the scope comes from the server's current challenge.
-    await client.SignOutAsync(ct).ConfigureAwait(false);
+    // A new sign-in replaces what is stored, so it also widens access: the scope comes from the server's current challenge. The old
+    // tokens stay in the file until the new ones exist, so a sign-in that fails or is abandoned leaves the user signed in as before.
     var http = client.CreateHttpClient();
     _disposables.Add(http);
     await using (await ModelContext.ConnectAsync(ContextTransport.Http(resource, http), o.Era, cancellationToken: ct).ConfigureAwait(false))
@@ -128,8 +159,51 @@ internal sealed partial class CliApp
       return ExitCode.Ok;
     }
 
+    await store.CommitAsync(ct).ConfigureAwait(false);
     await output.WriteLineAsync("Signed in to " + resource.GetLeftPart(UriPartial.Path) + ".").ConfigureAwait(false);
     return ExitCode.Ok;
+  }
+
+  // Reads see no token records and writes of them are held back, so login starts from nothing without erasing anything. Client
+  // registrations and the like pass straight through.
+  private sealed class StagingTokenStore(FileTokenStore real) : ITokenStore
+  {
+    private readonly Dictionary<string, TokenRecord> _staged = new(StringComparer.Ordinal);
+
+    private static bool IsToken(string key) => key.StartsWith("token:", StringComparison.Ordinal);
+
+    public ValueTask<TokenRecord?> GetAsync(string key, CancellationToken cancellationToken) =>
+      IsToken(key) ? ValueTask.FromResult(_staged.GetValueOrDefault(key)) : real.GetAsync(key, cancellationToken);
+
+    public ValueTask SetAsync(string key, TokenRecord record, CancellationToken cancellationToken)
+    {
+      if (IsToken(key))
+      {
+        _staged[key] = record;
+        return ValueTask.CompletedTask;
+      }
+
+      return real.SetAsync(key, record, cancellationToken);
+    }
+
+    public ValueTask RemoveAsync(string key, CancellationToken cancellationToken)
+    {
+      if (IsToken(key))
+      {
+        _staged.Remove(key);
+        return ValueTask.CompletedTask;
+      }
+
+      return real.RemoveAsync(key, cancellationToken);
+    }
+
+    public async ValueTask CommitAsync(CancellationToken cancellationToken)
+    {
+      foreach (var (key, record) in _staged)
+      {
+        await real.SetAsync(key, record, cancellationToken).ConfigureAwait(false);
+      }
+    }
   }
 
   private async Task<int> LogoutAsync(CliOptions o, CancellationToken ct)

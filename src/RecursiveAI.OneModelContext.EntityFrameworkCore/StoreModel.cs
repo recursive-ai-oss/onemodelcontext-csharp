@@ -60,6 +60,9 @@ internal sealed class CodeRow
 
   public long ExpiresAtTicks { get; set; }
 
+  // The spent-code marker lives until the refresh family does, so a late replay still revokes it.
+  public long FamilyExpiresAtTicks { get; set; }
+
   public bool Redeemed { get; set; }
 }
 
@@ -140,6 +143,8 @@ internal static class StoreKeys
 {
   internal const int MaxClientIdLength = 450;
 
+  internal const int MaxTaskIdLength = 128;
+
   /// <summary>SHA-256, base64url: a fixed-length key for values whose length a caller controls (assertion ids, token store keys).</summary>
   internal static string Hash(string key) => Base64Url.EncodeToString(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
 
@@ -168,14 +173,14 @@ public static class ContextStoresModelBuilderExtensions
   /// <summary>The default table-name prefix.</summary>
   public const string DefaultTablePrefix = "ModelContext";
 
-  /// <summary>Maps every store this package provides: the authorization store and the token store.</summary>
+  /// <summary>Maps every store this package provides: the authorization store, the token store and the task store.</summary>
   /// <param name="modelBuilder">The model builder of your context.</param>
   /// <param name="tablePrefix">Prefix for the table names. Default <see cref="DefaultTablePrefix"/>.</param>
   /// <param name="schema">The database schema for the tables, or null for the provider's default.</param>
   /// <returns>The same builder.</returns>
   /// <exception cref="ArgumentNullException"><paramref name="modelBuilder"/> is null.</exception>
   public static ModelBuilder ApplyContextStores(this ModelBuilder modelBuilder, string tablePrefix = DefaultTablePrefix, string? schema = null) =>
-    modelBuilder.ApplyAuthorizationStore(tablePrefix, schema).ApplyTokenStore(tablePrefix, schema);
+    modelBuilder.ApplyAuthorizationStore(tablePrefix, schema).ApplyTokenStore(tablePrefix, schema).ApplyTaskStore(tablePrefix, schema);
 
   /// <summary>
   /// Maps the tables of <see cref="EfAuthorizationStore{TContext}"/>: clients, authorization codes, refresh tokens, revocations and
@@ -184,9 +189,15 @@ public static class ContextStoresModelBuilderExtensions
   /// <param name="modelBuilder">The model builder of your context.</param>
   /// <param name="tablePrefix">Prefix for the table names. Default <see cref="DefaultTablePrefix"/>.</param>
   /// <param name="schema">The database schema for the tables, or null for the provider's default.</param>
+  /// <param name="clientIdCollation">
+  /// A binary, case-sensitive collation for the <c>client_id</c> key column, in the provider's own spelling (for example
+  /// <c>Latin1_General_100_BIN2</c> on SQL Server, <c>BINARY</c> on SQLite, <c>C</c> on PostgreSQL), or null to leave the database default.
+  /// Client ids are case-sensitive; the store also compares them exactly after the lookup, so a case-insensitive default cannot make
+  /// one client answer to another's id, but a binary collation keeps two ids that differ only in case from colliding as keys.
+  /// </param>
   /// <returns>The same builder.</returns>
   /// <exception cref="ArgumentNullException"><paramref name="modelBuilder"/> is null.</exception>
-  public static ModelBuilder ApplyAuthorizationStore(this ModelBuilder modelBuilder, string tablePrefix = DefaultTablePrefix, string? schema = null)
+  public static ModelBuilder ApplyAuthorizationStore(this ModelBuilder modelBuilder, string tablePrefix = DefaultTablePrefix, string? schema = null, string? clientIdCollation = null)
   {
     ArgumentNullException.ThrowIfNull(modelBuilder);
     ArgumentNullException.ThrowIfNull(tablePrefix);
@@ -196,7 +207,11 @@ public static class ContextStoresModelBuilderExtensions
       e.ToTable(tablePrefix + "Clients", schema);
       e.HasKey(r => r.ClientId);
       // A relational key must be bounded (SQL Server limits index keys to 900 bytes). Longer ids are refused by the store.
-      e.Property(r => r.ClientId).HasMaxLength(StoreKeys.MaxClientIdLength);
+      var clientId = e.Property(r => r.ClientId).HasMaxLength(StoreKeys.MaxClientIdLength);
+      if (clientIdCollation is not null)
+      {
+        clientId.UseCollation(clientIdCollation);
+      }
     });
     modelBuilder.Entity<CodeRow>(e =>
     {
@@ -244,6 +259,26 @@ public static class ContextStoresModelBuilderExtensions
       e.ToTable(tablePrefix + "TokenRecords", schema);
       e.HasKey(r => r.KeyHash);
       e.Property(r => r.KeyHash).HasMaxLength(64);
+    });
+    return modelBuilder;
+  }
+
+  /// <summary>Maps the table of <see cref="EfTaskStore{TContext}"/>.</summary>
+  /// <param name="modelBuilder">The model builder of your context.</param>
+  /// <param name="tablePrefix">Prefix for the table names. Default <see cref="DefaultTablePrefix"/>.</param>
+  /// <param name="schema">The database schema for the tables, or null for the provider's default.</param>
+  /// <returns>The same builder.</returns>
+  /// <exception cref="ArgumentNullException"><paramref name="modelBuilder"/> is null.</exception>
+  public static ModelBuilder ApplyTaskStore(this ModelBuilder modelBuilder, string tablePrefix = DefaultTablePrefix, string? schema = null)
+  {
+    ArgumentNullException.ThrowIfNull(modelBuilder);
+    ArgumentNullException.ThrowIfNull(tablePrefix);
+    modelBuilder.Entity<TaskRow>(e =>
+    {
+      e.ToTable(tablePrefix + "Tasks", schema);
+      e.HasKey(r => r.TaskId);
+      e.Property(r => r.TaskId).HasMaxLength(StoreKeys.MaxTaskIdLength);
+      e.HasIndex(r => r.ExpiresAtTicks);
     });
     return modelBuilder;
   }

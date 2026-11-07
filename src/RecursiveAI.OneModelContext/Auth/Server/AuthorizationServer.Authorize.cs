@@ -74,6 +74,12 @@ public sealed partial class AuthorizationServer
       return;
     }
 
+    if (redirectUri is not null && (redirectUri.Length > 2048 || !RedirectUriRules.IsPlainUri(redirectUri)))
+    {
+      await WriteTextErrorAsync(exchange, 400, "invalid_request: the redirect_uri is not valid.", cancellationToken).ConfigureAwait(false);
+      return;
+    }
+
     if (redirectUri is null)
     {
       // RFC 6749 section 3.1.2.3: only a client with exactly one registered URI may omit it.
@@ -130,7 +136,7 @@ public sealed partial class AuthorizationServer
 
     var asked = SplitScopes(parameters.Get("scope"));
     var scopes = AllowedScopes(asked.Count > 0 ? asked : _options.DefaultScopes, client);
-    if (asked.Count > 0 && scopes.Count == 0)
+    if (!AreScopeTokens(asked) || (asked.Count > 0 && scopes.Count == 0))
     {
       await ErrorAsync("invalid_scope", "None of the requested scopes is available.").ConfigureAwait(false);
       return;
@@ -218,6 +224,7 @@ public sealed partial class AuthorizationServer
       FamilyId = RandomToken(),
       Claims = decision.Claims,
       ExpiresAt = now + _options.AuthorizationCodeLifetime,
+      FamilyExpiresAt = now + _options.MaxRefreshFamilyLifetime,
     }, cancellationToken).ConfigureAwait(false);
 
     await RedirectAsync(exchange, pending.RedirectUri, pending.State, [("code", code)], cancellationToken).ConfigureAwait(false);
@@ -226,6 +233,13 @@ public sealed partial class AuthorizationServer
   /// <summary>Sends the browser back to the client with the parameters in the query, always with <c>iss</c> (RFC 9207 section 2).</summary>
   private async Task RedirectAsync(IHttpExchange exchange, string redirectUri, string? state, (string Name, string Value)[] parameters, CancellationToken cancellationToken)
   {
+    // A redirect that cannot be built safely is never sent as a bare 302; the user is told instead (RFC 6749 section 4.1.2.1).
+    if (!RedirectUriRules.IsPlainUri(redirectUri) || !RedirectUriRules.IsPlainUri(_issuer))
+    {
+      await WriteTextErrorAsync(exchange, 400, "invalid_request: the redirect_uri is not valid.", cancellationToken).ConfigureAwait(false);
+      return;
+    }
+
     var sb = new StringBuilder(redirectUri);
     sb.Append(redirectUri.Contains('?', StringComparison.Ordinal) ? '&' : '?');
     var first = true;

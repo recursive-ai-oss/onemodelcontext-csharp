@@ -493,13 +493,41 @@ public sealed partial class AuthorizationServer : IDisposable
   private static List<string> SplitScopes(string? scope) =>
     string.IsNullOrWhiteSpace(scope) ? [] : scope.Split(' ', StringSplitOptions.RemoveEmptyEntries).Distinct(StringComparer.Ordinal).ToList();
 
-  /// <summary>Restricts requested scopes to those the server supports and the client may have (RFC 6749 section 3.3 lets the server ignore the rest).</summary>
+  /// <summary>
+  /// Whether a scope allow-list applies to the client: the server's <see cref="AuthorizationServerOptions.ScopesSupported"/> or the
+  /// client's own <see cref="RegisteredClient.Scopes"/>. Without one every well-formed scope string would be granted.
+  /// </summary>
+  private bool HasScopeAllowList(RegisteredClient client) => _options.ScopesSupported.Count > 0 || client.Scopes is not null;
+
+  // RFC 6749 section 3.3: scope-token = 1*( %x21 / %x23-5B / %x5D-7E ), so no quote, backslash, control character or non-ASCII.
+  private static bool IsScopeToken(string scope)
+  {
+    if (scope.Length is 0 or > 256)
+    {
+      return false;
+    }
+
+    foreach (var c in scope)
+    {
+      if (!(c is '\u0021' or (>= '\u0023' and <= '\u005b') or (>= '\u005d' and <= '\u007e')))
+      {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private static bool AreScopeTokens(List<string> scopes) => scopes.Count <= 64 && scopes.All(IsScopeToken);
+
+  /// <summary>Restricts requested scopes to well-formed ones that the server supports and the client may have (RFC 6749 section 3.3 lets the server ignore the rest).</summary>
   private List<string> AllowedScopes(IEnumerable<string> requested, RegisteredClient client)
   {
     var list = new List<string>();
     foreach (var scope in requested)
     {
-      if ((_options.ScopesSupported.Count == 0 || _options.ScopesSupported.Contains(scope, StringComparer.Ordinal))
+      if (IsScopeToken(scope)
+        && (_options.ScopesSupported.Count == 0 || _options.ScopesSupported.Contains(scope, StringComparer.Ordinal))
         && (client.Scopes is null || client.Scopes.Contains(scope, StringComparer.Ordinal)))
       {
         list.Add(scope);
@@ -624,7 +652,7 @@ public sealed partial class AuthorizationServer : IDisposable
     internal OwnTokenValidator(AuthorizationServer server)
     {
       _server = server;
-      _inner = new JwtTokenValidator(server._issuer, new OwnKeys(server), server._time);
+      _inner = new JwtTokenValidator(server._issuer, new OwnKeys(server), server._time) { RequireAccessTokenType = true };
     }
 
     public async ValueTask<TokenValidationResult> ValidateAsync(string accessToken, TokenValidationRequest request, CancellationToken cancellationToken)

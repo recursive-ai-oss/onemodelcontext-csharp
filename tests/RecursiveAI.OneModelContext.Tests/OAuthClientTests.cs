@@ -537,7 +537,7 @@ public class OAuthClientTests
     using var key = RSA.Create(2048);
     await using var auth = new TestAuthServer { ClientAssertionKey = key };
     await using var resource = new TestProtectedResource(auth);
-    var options = new OAuthClientOptions(resource.Url) { ClientCredentials = new ClientCredentialsGrant("service-2", key, "kid-1") };
+    var options = new OAuthClientOptions(resource.Url) { ClientCredentials = new ClientCredentialsGrant("service-2", key, "kid-1") { ExpectedIssuer = auth.Issuer } };
     using var oauth = new OAuthClient(options);
     using var http = new HttpClient(new OAuthHttpHandler(oauth));
 

@@ -489,9 +489,16 @@ public sealed partial class AuthorizationServer
       return;
     }
 
+    // No scope allow-list, no tokens: without one any string would be granted to a client that acts for itself (fail closed).
+    if (!HasScopeAllowList(client))
+    {
+      await WriteOAuthErrorAsync(exchange, 400, "invalid_scope", "The server has no scope list for this client, so it grants no scopes to client credentials.", null, cancellationToken).ConfigureAwait(false);
+      return;
+    }
+
     var asked = SplitScopes(form.Get("scope"));
     var scopes = AllowedScopes(asked.Count > 0 ? asked : _options.DefaultScopes, client);
-    if (asked.Count > 0 && scopes.Count == 0)
+    if (!AreScopeTokens(asked) || (asked.Count > 0 && scopes.Count == 0))
     {
       await WriteOAuthErrorAsync(exchange, 400, "invalid_scope", "None of the requested scopes is available.", null, cancellationToken).ConfigureAwait(false);
       return;
@@ -632,6 +639,12 @@ public sealed partial class AuthorizationServer
     // Scope: the assertion's scopes are an upper bound; the request may ask for fewer; local policy trims the rest.
     var assertionScopes = claims.TryGetProperty("scope", out var sc) && sc.ValueKind == JsonValueKind.String ? SplitScopes(sc.GetString()) : null;
     var requestedScopes = SplitScopes(form.Get("scope"));
+    if (!AreScopeTokens(requestedScopes))
+    {
+      await WriteOAuthErrorAsync(exchange, 400, "invalid_scope", "None of the requested scopes is available.", null, cancellationToken).ConfigureAwait(false);
+      return;
+    }
+
     IEnumerable<string> candidate = requestedScopes.Count > 0 ? requestedScopes : assertionScopes ?? (IReadOnlyList<string>)_options.DefaultScopes;
     if (assertionScopes is not null)
     {
@@ -646,7 +659,8 @@ public sealed partial class AuthorizationServer
       return;
     }
 
-    var mapped = subject;
+    // A sub is only unique within its issuer, so the default subject carries the issuer: two IdPs can never collide on one user.
+    string? mapped = idp.Issuer + "#" + subject;
     if (enterprise.ResolveSubject is { } resolve)
     {
       mapped = await resolve(new IdentityAssertion(idp.Issuer, subject, client.ClientId, assertionScopes ?? []), cancellationToken).ConfigureAwait(false);
@@ -879,6 +893,9 @@ public sealed partial class AuthorizationServer
         TokenEndpointAuthMethod = method,
         SecretHash = secret is null ? null : ClientSecret.Hash(secret),
         GrantTypes = grants,
+
+        // Anonymous registration never earns scopes by itself: with no server-wide list the client may be granted none.
+        Scopes = _options.ScopesSupported.Count > 0 ? null : [],
         CreatedAt = now,
       }, cancellationToken).ConfigureAwait(false);
 
