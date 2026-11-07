@@ -140,6 +140,8 @@ internal static class StoreKeys
 {
   internal const int MaxClientIdLength = 450;
 
+  internal const int MaxTaskIdLength = 128;
+
   /// <summary>SHA-256, base64url: a fixed-length key for values whose length a caller controls (assertion ids, token store keys).</summary>
   internal static string Hash(string key) => Base64Url.EncodeToString(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
 
@@ -168,14 +170,14 @@ public static class ContextStoresModelBuilderExtensions
   /// <summary>The default table-name prefix.</summary>
   public const string DefaultTablePrefix = "ModelContext";
 
-  /// <summary>Maps every store this package provides: the authorization store and the token store.</summary>
+  /// <summary>Maps every store this package provides: the authorization store, the token store and the task store.</summary>
   /// <param name="modelBuilder">The model builder of your context.</param>
   /// <param name="tablePrefix">Prefix for the table names. Default <see cref="DefaultTablePrefix"/>.</param>
   /// <param name="schema">The database schema for the tables, or null for the provider's default.</param>
   /// <returns>The same builder.</returns>
   /// <exception cref="ArgumentNullException"><paramref name="modelBuilder"/> is null.</exception>
   public static ModelBuilder ApplyContextStores(this ModelBuilder modelBuilder, string tablePrefix = DefaultTablePrefix, string? schema = null) =>
-    modelBuilder.ApplyAuthorizationStore(tablePrefix, schema).ApplyTokenStore(tablePrefix, schema);
+    modelBuilder.ApplyAuthorizationStore(tablePrefix, schema).ApplyTokenStore(tablePrefix, schema).ApplyTaskStore(tablePrefix, schema);
 
   /// <summary>
   /// Maps the tables of <see cref="EfAuthorizationStore{TContext}"/>: clients, authorization codes, refresh tokens, revocations and
@@ -244,6 +246,26 @@ public static class ContextStoresModelBuilderExtensions
       e.ToTable(tablePrefix + "TokenRecords", schema);
       e.HasKey(r => r.KeyHash);
       e.Property(r => r.KeyHash).HasMaxLength(64);
+    });
+    return modelBuilder;
+  }
+
+  /// <summary>Maps the table of <see cref="EfTaskStore{TContext}"/>.</summary>
+  /// <param name="modelBuilder">The model builder of your context.</param>
+  /// <param name="tablePrefix">Prefix for the table names. Default <see cref="DefaultTablePrefix"/>.</param>
+  /// <param name="schema">The database schema for the tables, or null for the provider's default.</param>
+  /// <returns>The same builder.</returns>
+  /// <exception cref="ArgumentNullException"><paramref name="modelBuilder"/> is null.</exception>
+  public static ModelBuilder ApplyTaskStore(this ModelBuilder modelBuilder, string tablePrefix = DefaultTablePrefix, string? schema = null)
+  {
+    ArgumentNullException.ThrowIfNull(modelBuilder);
+    ArgumentNullException.ThrowIfNull(tablePrefix);
+    modelBuilder.Entity<TaskRow>(e =>
+    {
+      e.ToTable(tablePrefix + "Tasks", schema);
+      e.HasKey(r => r.TaskId);
+      e.Property(r => r.TaskId).HasMaxLength(StoreKeys.MaxTaskIdLength);
+      e.HasIndex(r => r.ExpiresAtTicks);
     });
     return modelBuilder;
   }
