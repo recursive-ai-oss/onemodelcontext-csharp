@@ -28,6 +28,8 @@ it yet. See [CHANGELOG.md](CHANGELOG.md).
 |---|---|
 | `src/RecursiveAI.OneModelContext` | The library. `JsonRpc` is the base layer and holds no protocol types; `Protocol` holds the message records; `Wire` holds the codec contract. |
 | `src/RecursiveAI.OneModelContext.Generator` | The incremental source generator, bundled into the core package as an analyzer. |
+| `src/RecursiveAI.OneModelContext.EntityFrameworkCore` | Authorization, token and task stores on your own `DbContext`, for several instances. |
+| `src/RecursiveAI.OneModelContext.OneLite` | The same stores in one embedded OneLite database file, for a single host; trim and NativeAOT safe. |
 | `src/RecursiveAI.OneModelContext.Cli` | The `onemodelcontext` command line tool. |
 | `tests/` | Unit tests and the NativeAOT smoke program. |
 | `conformance/` | A runner for the protocol's official conformance suite. |

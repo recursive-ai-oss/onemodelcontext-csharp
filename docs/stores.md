@@ -76,3 +76,46 @@ table of user data.
   compatible. Building it with the trim analyzer on reports IL2067 and IL2091 on the generic `DbSet<T>` helpers. Servers that publish
   with NativeAOT use the memory or file stores, or their own `IAuthorizationStore`.
 - Purging expired rows is the server's job: it calls `PurgeAsync` periodically.
+
+## OneLite stores (a single host)
+
+`RecursiveAI.OneModelContext.OneLite` keeps the same three stores in one embedded OneLite database
+file, for an application that runs as a single host and wants durable state without a database server or Entity Framework. It references
+the core package and `RecursiveAI.OneLite` and nothing else, and it is trim and NativeAOT safe.
+
+| Store | Implements |
+|---|---|
+| `OneLiteAuthorizationStore` | `IAuthorizationStore` |
+| `OneLiteTokenStore` | `ITokenStore` |
+| `OneLiteTaskStore` | `ITaskStore` (Tasks extension, experimental, `OMCX0001`) |
+
+```csharp
+await using var auth = await OneLiteAuthorizationStore.OpenAsync("state/mcp.db");   // creates the file and the tables
+var server = new AuthorizationServer(new AuthorizationServerOptions { /* … */ Store = auth });
+
+await using var tokens = await OneLiteTokenStore.OpenAsync("state/mcp.db", protector);  // protector: an optional ITokenProtector
+await using var tasks = await OneLiteTaskStore.OpenAsync("state/mcp.db", capacity: 1000);
+```
+
+`OpenAsync(path)` opens its own connection and the store closes it on dispose. `AttachAsync(database)` uses a `Database` you opened, creates
+the tables in it and leaves it open on dispose. Several stores, in one process or several, can use one file.
+
+- **Same behaviour as the other stores.** A code redeems once, a refresh token rotates once, an assertion id is accepted once until it
+  expires, revocations keep the later expiry, a spent code is remembered until its family expires, and a task update succeeds only at the
+  version the caller read. Redeeming and rotating read and mark in one write transaction; assertions, revocations and task updates are
+  single statements. Codes, refresh tokens and client secrets are hashes, and assertion and revocation keys are stored as a SHA-256 hash.
+- **Processes.** Correctness rests on OneLite's write-ahead-log file locking, where a write transaction holds the file's one write lock, so
+  two processes (or two connections) racing on one code or one task version get one winner. A writer that finds the file locked waits up to
+  OneLite's busy timeout (5 seconds by default) and then fails with `OneLiteException`. All processes must be on one machine and a local
+  disk: do not put the file on a network share. The tests race separate connections to one file; for several machines use the Entity
+  Framework stores.
+- **One connection, one call at a time.** A store serializes its calls on its connection, which is plenty for sign-ins and task polling.
+  Open a store per component if one is busy.
+- **Schema.** The package creates its tables (`ModelContext…`, the same names as the Entity Framework stores) and records their version in
+  a table of its own, `ModelContextSchema`, so `PRAGMA user_version` and your own tables in the same file are untouched. Opening a file whose
+  stored version is newer than the package fails with an `InvalidOperationException` that says to update the package. Upgrades from an older
+  version run when the file is opened, in one transaction.
+- **At rest.** As for the Entity Framework token store: records are sealed by the `ITokenProtector` when one is given, otherwise plain JSON, so
+  protect the file or give the store a protector. The task store holds results as the JSON text the service wrote.
+- **Capacity.** `OneLiteTaskStore` checks capacity and inserts in one write transaction, so the limit is exact even across processes.
+- **Purging.** The server calls `PurgeAsync` periodically, as with every store.

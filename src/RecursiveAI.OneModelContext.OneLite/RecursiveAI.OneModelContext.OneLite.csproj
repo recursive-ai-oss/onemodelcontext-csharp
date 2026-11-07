@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>$(PackagePrefix).OneModelContext.OneLite</AssemblyName>
+    <RootNamespace>RecursiveAI.OneModelContext.OneLite</RootNamespace>
+    <PackageId>$(PackagePrefix).OneModelContext.OneLite</PackageId>
+    <IsPackable>true</IsPackable>
+    <IsTrimmable>true</IsTrimmable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <Description>OneLite stores for OneModelContext: a .NET SDK for the Model Context Protocol®. IAuthorizationStore, ITokenStore and ITaskStore in one embedded database file with a shipped schema, for a single host with no database server. Pre-release; unpublished. Unaffiliated with 1MCP, the Go OneMCP aggregator and the Model Context Protocol project.</Description>
+    <PackageTags>$(PackageTags);onelite;sqlite;oauth;authorization-server</PackageTags>
+  </PropertyGroup>
+
+  <!-- The adapter's only dependencies are the core package and OneLite (the embedded database; managed, trim and AOT safe). -->
+  <ItemGroup>
+    <PackageReference Include="RecursiveAI.OneLite" />
+    <ProjectReference Include="../RecursiveAI.OneModelContext/RecursiveAI.OneModelContext.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="RecursiveAI.OneModelContext.OneLite.Tests" />
+  </ItemGroup>
+
+</Project>
