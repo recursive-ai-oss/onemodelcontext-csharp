@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using RecursiveAI.OneModelContext.Diagnostics;
 using RecursiveAI.OneModelContext.JsonRpc;
@@ -51,12 +52,74 @@ internal sealed class ServerFeatures(ContextServer server)
         return ListPrompts(Read(parameters, WireJsonContext.Default.PaginatedRequestParams));
       case Methods.PromptsGet:
         return await GetPromptAsync(Read(parameters, WireJsonContext.Default.GetPromptRequestParams), context).ConfigureAwait(false);
+      case Methods.SubscriptionsListen when context.Era == ProtocolEra.Modern:
+        return await ListenAsync(Read(parameters, WireJsonContext.Default.SubscriptionsListenRequestParams), context).ConfigureAwait(false);
       case Methods.CompletionComplete when server.Completions is { } complete:
         return await complete(Read(parameters, WireJsonContext.Default.CompleteRequestParams), context).ConfigureAwait(false);
       default:
         throw new ProtocolException(JsonRpcErrorCodes.MethodNotFound, "Method not found: " + method + ".");
     }
   }
+
+  // 2026-07-28 basic/patterns/subscriptions: a long-lived request that acknowledges the filter it will honour, then streams the
+  // notifications the client opted in to, each tagged with the id of this request, until the client cancels it or the server ends it.
+  private async ValueTask<SubscriptionsListenResult> ListenAsync(SubscriptionsListenRequestParams request, RequestContext context)
+  {
+    var id = context.RequestId ?? throw new ProtocolException(JsonRpcErrorCodes.InternalError, "Internal error.");
+    var capabilities = server.Capabilities;
+    var wanted = request.Notifications;
+    var honored = new SubscriptionFilter
+    {
+      ToolsListChanged = wanted.ToolsListChanged == true && capabilities.Tools is not null ? true : null,
+      PromptsListChanged = wanted.PromptsListChanged == true && capabilities.Prompts is not null ? true : null,
+      ResourcesListChanged = wanted.ResourcesListChanged == true && capabilities.Resources is not null ? true : null,
+      ResourceSubscriptions = wanted.ResourceSubscriptions is { Count: > 0 } uris && capabilities.Resources is not null ? [.. uris] : null,
+    };
+
+    // Changes queue here and are sent in order after the acknowledgment. A list change carries no payload, so when a slow client lets the
+    // queue fill, the oldest entries are dropped: the client still learns that something changed.
+    var queue = Channel.CreateBounded<JsonRpcNotification>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true });
+    var meta = new MetaObject { SubscriptionId = id };
+    using var registration = server.Events.Subscribe(serverEvent =>
+    {
+      switch (serverEvent.Kind)
+      {
+        case ServerEventKind.ToolsListChanged when honored.ToolsListChanged == true:
+          queue.Writer.TryWrite(ListChanged(Methods.NotificationsToolsListChanged, meta));
+          break;
+        case ServerEventKind.PromptsListChanged when honored.PromptsListChanged == true:
+          queue.Writer.TryWrite(ListChanged(Methods.NotificationsPromptsListChanged, meta));
+          break;
+        case ServerEventKind.ResourcesListChanged when honored.ResourcesListChanged == true:
+          queue.Writer.TryWrite(ListChanged(Methods.NotificationsResourcesListChanged, meta));
+          break;
+        case ServerEventKind.ResourceUpdated when serverEvent.Uri is { } uri && honored.ResourceSubscriptions?.Contains(uri) == true:
+          var updated = new ResourceUpdatedNotificationParams { Uri = uri, Meta = meta };
+          queue.Writer.TryWrite(new JsonRpcNotification(Methods.NotificationsResourcesUpdated, JsonSerializer.SerializeToElement(updated, WireJsonContext.Default.ResourceUpdatedNotificationParams)));
+          break;
+        case ServerEventKind.Shutdown:
+          queue.Writer.TryComplete();
+          break;
+      }
+    });
+
+    var ack = new SubscriptionsAcknowledgedNotificationParams { Notifications = honored, Meta = meta };
+    await context.SendNotificationAsync(
+      new JsonRpcNotification(Methods.NotificationsSubscriptionsAcknowledged, JsonSerializer.SerializeToElement(ack, WireJsonContext.Default.SubscriptionsAcknowledgedNotificationParams)),
+      context.CancellationToken).ConfigureAwait(false);
+
+    // Cancelling the request (notifications/cancelled, or the stream closing) ends the loop with OperationCanceledException and no response.
+    await foreach (var notification in queue.Reader.ReadAllAsync(context.CancellationToken).ConfigureAwait(false))
+    {
+      await context.SendNotificationAsync(notification, context.CancellationToken).ConfigureAwait(false);
+    }
+
+    // Graceful end: a normal result that names the subscription it closes.
+    return new SubscriptionsListenResult { ResultType = WireNames.ResultTypeComplete, Meta = meta };
+  }
+
+  private static JsonRpcNotification ListChanged(string method, MetaObject meta) =>
+    new(method, JsonSerializer.SerializeToElement(new RequestParams { Meta = meta }, WireJsonContext.Default.RequestParams));
 
   // Bad params never throw out of a handler: they become -32602.
   private static T Read<T>(JsonElement parameters, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> info)

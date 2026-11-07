@@ -43,8 +43,10 @@ public sealed partial class RequestContext
     IServerSink sink,
     IInputChannel input,
     ClaimsPrincipal? principal,
-    CancellationToken cancellationToken)
+    CancellationToken cancellationToken,
+    JsonRpcId? requestId = null)
   {
+    RequestId = requestId;
     Server = server;
     Method = method;
     Name = name;
@@ -60,6 +62,13 @@ public sealed partial class RequestContext
 
   /// <summary>The server handling the request.</summary>
   public ContextServer Server { get; }
+
+  /// <summary>The JSON-RPC id of the request, or null when the host did not supply one.</summary>
+  internal JsonRpcId? RequestId { get; }
+
+  /// <summary>Sends a notification on the stream of this request.</summary>
+  internal ValueTask SendNotificationAsync(JsonRpcNotification notification, CancellationToken cancellationToken) =>
+    _sink.SendNotificationAsync(notification, cancellationToken);
 
   /// <summary>The JSON-RPC method.</summary>
   public string Method { get; }
@@ -139,7 +148,8 @@ public sealed partial class RequestContext
         new ClientCapabilities { Elicitation = new ElicitationCapability() });
     }
 
-    var parameters = new ElicitRequestParams { Message = message, RequestedSchema = requestedSchema };
+    // 2026-07-28 spells the mode out; earlier revisions treat a missing mode as a form.
+    var parameters = new ElicitRequestParams { Mode = Era == ProtocolEra.Modern ? "form" : null, Message = message, RequestedSchema = requestedSchema };
     var element = JsonSerializer.SerializeToElement(parameters, WireJsonContext.Default.ElicitRequestParams);
     var answer = await _input.RequestInputAsync(Methods.ElicitationCreate, element, CancellationToken).ConfigureAwait(false);
     try
@@ -175,6 +185,52 @@ public sealed partial class RequestContext
     catch (JsonException ex)
     {
       throw new ProtocolException(JsonRpcErrorCodes.InvalidParams, "The elicitation answer does not match the expected form.", default, ex);
+    }
+  }
+
+  /// <summary>Asks the client's model for a completion. Deprecated by 2026-07-28; the same call works on every revision.</summary>
+  /// <param name="request">The sampling request.</param>
+  /// <returns>The client's answer.</returns>
+  /// <exception cref="MissingCapabilityException">The client cannot sample.</exception>
+  public async ValueTask<CreateMessageResult> SampleAsync(CreateMessageRequestParams request)
+  {
+    ArgumentNullException.ThrowIfNull(request);
+    if (ClientCapabilities.Sampling is null)
+    {
+      throw new MissingCapabilityException("The client does not support sampling.", new ClientCapabilities { Sampling = new SamplingCapability() });
+    }
+
+    var element = JsonSerializer.SerializeToElement(request, WireJsonContext.Default.CreateMessageRequestParams);
+    var answer = await _input.RequestInputAsync(Methods.SamplingCreateMessage, element, CancellationToken).ConfigureAwait(false);
+    return ReadAnswer(answer, WireJsonContext.Default.CreateMessageResult, "sampling");
+  }
+
+  /// <summary>Asks the client for its roots. Deprecated by 2026-07-28; the same call works on every revision.</summary>
+  /// <returns>The client's roots.</returns>
+  /// <exception cref="MissingCapabilityException">The client cannot list roots.</exception>
+  public async ValueTask<ListRootsResult> ListRootsAsync()
+  {
+    if (ClientCapabilities.Roots is null)
+    {
+      throw new MissingCapabilityException("The client does not support roots.", new ClientCapabilities { Roots = new RootsCapability() });
+    }
+
+    var element = JsonSerializer.SerializeToElement(new ListRootsRequestParams(), WireJsonContext.Default.ListRootsRequestParams);
+    var answer = await _input.RequestInputAsync(Methods.RootsList, element, CancellationToken).ConfigureAwait(false);
+    return ReadAnswer(answer, WireJsonContext.Default.ListRootsResult, "roots");
+  }
+
+  // A client's answer is attacker-controlled input like any other: a malformed one is a protocol error, never an exception.
+  private static T ReadAnswer<T>(JsonElement answer, JsonTypeInfo<T> info, string what)
+    where T : class
+  {
+    try
+    {
+      return answer.Deserialize(info) ?? throw new ProtocolException(JsonRpcErrorCodes.InvalidParams, "The " + what + " answer is empty.");
+    }
+    catch (JsonException ex)
+    {
+      throw new ProtocolException(JsonRpcErrorCodes.InvalidParams, "The " + what + " answer is not valid.", default, ex);
     }
   }
 

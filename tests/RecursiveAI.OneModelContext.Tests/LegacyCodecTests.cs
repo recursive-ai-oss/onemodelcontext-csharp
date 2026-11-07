@@ -553,7 +553,8 @@ public class LegacyCodecTests
     Assert.Equal(-32600, await CodeAsync("""{"jsonrpc":"2.0","id":1,"method":7}"""));
     Assert.Equal(-32600, await CodeAsync("[]"));
     Assert.Equal(-32601, await CodeAsync("""{"jsonrpc":"2.0","id":1,"method":"nope/nothing"}"""));
-    Assert.Equal(-32601, await CodeAsync("""{"jsonrpc":"2.0","id":1,"method":"server/discover"}"""));
+    // server/discover always belongs to the modern codec, even on a connection that initialized as legacy; without _meta it is malformed.
+    Assert.Equal(-32602, await CodeAsync("""{"jsonrpc":"2.0","id":1,"method":"server/discover"}"""));
     Assert.Equal(-32602, await CodeAsync("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{}}"""));
     Assert.Equal(-32602, await CodeAsync("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"missing"}}"""));
     Assert.Equal(-32602, await CodeAsync("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":5}}"""));

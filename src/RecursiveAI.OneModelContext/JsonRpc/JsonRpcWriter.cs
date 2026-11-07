@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace RecursiveAI.OneModelContext.JsonRpc;
@@ -8,6 +9,10 @@ namespace RecursiveAI.OneModelContext.JsonRpc;
 /// <summary>Writes JSON-RPC 2.0 messages as UTF-8 JSON.</summary>
 public static class JsonRpcWriter
 {
+  // Relaxed escaping keeps characters such as ' and < readable on the wire. Quotes, backslashes and control characters (so every
+  // newline, which frames messages on stdio and in SSE data lines) are still escaped, and non-ASCII text is written as UTF-8.
+  private static readonly JsonWriterOptions WriterOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
   /// <summary>Writes one message to a buffer writer, without a trailing newline.</summary>
   /// <param name="output">Where the bytes go.</param>
   /// <param name="message">The message.</param>
@@ -15,7 +20,7 @@ public static class JsonRpcWriter
   {
     ArgumentNullException.ThrowIfNull(output);
     ArgumentNullException.ThrowIfNull(message);
-    using var writer = new Utf8JsonWriter(output);
+    using var writer = new Utf8JsonWriter(output, WriterOptions);
     Write(writer, message);
   }
 
@@ -26,7 +31,7 @@ public static class JsonRpcWriter
   {
     ArgumentNullException.ThrowIfNull(output);
     ArgumentNullException.ThrowIfNull(messages);
-    using var writer = new Utf8JsonWriter(output);
+    using var writer = new Utf8JsonWriter(output, WriterOptions);
     writer.WriteStartArray();
     foreach (var message in messages)
     {
