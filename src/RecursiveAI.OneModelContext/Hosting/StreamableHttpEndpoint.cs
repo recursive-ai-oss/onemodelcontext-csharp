@@ -1139,6 +1139,8 @@ public sealed class StreamableHttpEndpoint : IDisposable
     }
 
     var lease = new BodyLease(this);
+    using var timeout = new CancellationTokenSource(_options.BodyReadTimeout, _time);
+    using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, call.Exchange.Aborted, _shutdown.Token);
     try
     {
       // With a declared length the buffer is exactly that size, so a body costs what it says and no more; without one it grows by
@@ -1149,8 +1151,6 @@ public sealed class StreamableHttpEndpoint : IDisposable
         return await RefuseBusyAsync(call, lease).ConfigureAwait(false);
       }
 
-      using var timeout = new CancellationTokenSource(_options.BodyReadTimeout, _time);
-      using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, call.Exchange.Aborted, _shutdown.Token);
       var probe = new byte[1];
       while (true)
       {
@@ -1200,7 +1200,9 @@ public sealed class StreamableHttpEndpoint : IDisposable
         lease.Length += read;
       }
     }
-    catch (OperationCanceledException) when (!call.Exchange.Aborted.IsCancellationRequested && !_shutdown.IsCancellationRequested)
+    // Only our own timer means 408. Any other cancellation, such as the listener giving up on a malformed or oversized chunk, has
+    // recorded its own status (400, 413) and is left to answer it.
+    catch (OperationCanceledException) when (timeout.IsCancellationRequested && !call.Exchange.Aborted.IsCancellationRequested && !_shutdown.IsCancellationRequested)
     {
       lease.Dispose();
       await WriteErrorAsync(call, 408, JsonRpcErrorCodes.InvalidRequest, "Request timeout: the body took too long.").ConfigureAwait(false);
