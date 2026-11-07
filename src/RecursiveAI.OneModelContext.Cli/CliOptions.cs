@@ -41,6 +41,9 @@ internal sealed class CliOptions
   /// <summary>The bearer token <c>proxy</c> requires from its callers.</summary>
   public string? Token { get; private set; }
 
+  /// <summary>A bearer token to send to an http(s) server, or <c>@file</c> holding it.</summary>
+  public string? Bearer { get; private set; }
+
   /// <summary>Allows <c>proxy</c> to listen on a non-loopback address.</summary>
   public bool AllowNonLoopback { get; private set; }
 
@@ -206,6 +209,9 @@ internal sealed class CliOptions
           break;
         case "--token":
           o.Token = Value();
+          break;
+        case "--bearer":
+          o.Bearer = Value();
           break;
         case "--allow-host":
           if (Value() is { } allowedHost)

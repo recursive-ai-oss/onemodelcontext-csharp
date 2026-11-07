@@ -23,7 +23,7 @@ internal static class ExitCode
   /// <summary>The server could not be reached or started, or the connection broke.</summary>
   public const int Transport = 3;
 
-  /// <summary>The server refused the credentials. Reserved for the HTTP client.</summary>
+  /// <summary>The server refused the credentials (HTTP 401 or 403).</summary>
   public const int Auth = 4;
 
   public const int Cancelled = 130;
@@ -55,6 +55,7 @@ internal sealed partial class CliApp(TextWriter output, TextWriter error, TextRe
       --json                     print JSON (also --output json); with a value (@file or '{...}') it gives call arguments
       --arg k=v, -a k=v          a tool or prompt argument; typed from the tool's input schema
       --yes, -y                  answer yes when a server asks to confirm
+      --bearer T|@file           bearer token for an http(s) server (sent as a header, never in the URL)
       --verbose, -v              show the server process's standard error
       --config FILE              server names file
       -h, --help   --version
@@ -132,17 +133,23 @@ internal sealed partial class CliApp(TextWriter output, TextWriter error, TextRe
     return ExitCode.Usage;
   }
 
-  // The exception text may name a command line or a URL but never carries a token: the CLI sends none yet and library errors scrub theirs.
+  // The exception text may name a command line or a URL but never carries a token: the CLI sends only what --bearer gives, as a header,
+  // and library errors scrub theirs. A connection that fails negotiation wraps the cause (for HTTP, the status line), so show that too.
   private async Task<int> FailAsync(Exception ex)
   {
+    var detail = ex.InnerException is { } inner && !ex.Message.Contains(inner.Message, StringComparison.Ordinal) ? " " + inner.Message : "";
+    var text = ex.Message + detail;
+
+    // The transport words a refusal as "(HTTP 401)" or "(HTTP 403)"; there is no typed exception for it yet.
     var code = ex switch
     {
+      ContextException when text.Contains("(HTTP 401)", StringComparison.Ordinal) || text.Contains("(HTTP 403)", StringComparison.Ordinal) => ExitCode.Auth,
       TransportException or NotSupportedException or IOException => ExitCode.Transport,
       _ => ExitCode.Failed,
     };
     var message = ex is ProtocolVersionException
-      ? ex.Message.Replace("connect with EraPreference.Auto or EraPreference.Legacy", "run again with --era auto or --era legacy", StringComparison.Ordinal)
-      : ex.Message;
+      ? text.Replace("connect with EraPreference.Auto or EraPreference.Legacy", "run again with --era auto or --era legacy", StringComparison.Ordinal)
+      : text;
     await error.WriteLineAsync("onemodelcontext: " + message).ConfigureAwait(false);
     return code;
   }
@@ -154,7 +161,24 @@ internal sealed partial class CliApp(TextWriter output, TextWriter error, TextRe
     Func<string, CancellationToken, ValueTask<bool>> confirm = ConfirmAsync(o);
     if (spec.Url is { } url)
     {
-      return await ModelContext.ConnectAsync(url, o.Era, confirm, cancellationToken: cancellationToken).ConfigureAwait(false);
+      // The credential goes in a header added to each request, never in the URL; the transport sends it to this origin only.
+      var bearer = o.Bearer is null ? null : o.Bearer.StartsWith('@') ? (await File.ReadAllTextAsync(o.Bearer[1..], cancellationToken).ConfigureAwait(false)).Trim() : o.Bearer;
+      var httpOptions = new HttpTransportOptions
+      {
+        AuthorizeRequest = bearer is null
+          ? null
+          : (request, _) =>
+          {
+            request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + bearer);
+            return ValueTask.CompletedTask;
+          },
+      };
+      if (!Uri.TryCreate(url, UriKind.Absolute, out var endpoint))
+      {
+        throw new ArgumentException("'" + url + "' is not a valid URL.");
+      }
+
+      return await ModelContext.ConnectAsync(ContextTransport.Http(endpoint, options: httpOptions), o.Era, confirm, cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     var options = new ProcessTransportOptions

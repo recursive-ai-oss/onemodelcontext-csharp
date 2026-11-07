@@ -293,4 +293,53 @@ public sealed class CliTests
     Assert.Equal(2, code);
     Assert.Contains("stdio", err);
   }
+
+  [Theory]
+  [InlineData("modern", "2026-07-28")]
+  [InlineData("legacy", "2025-11-25")]
+  [InlineData("auto", "2026-07-28")]
+  public async Task UrlServersWorkOnBothEras(string era, string version)
+  {
+    var (_, run, output, _, stop) = await StartProxyAsync("proxy", Server, "--listen", "0", "--token", "url-token-456");
+    try
+    {
+      var url = output.ToString().Split("listening on ")[1].Trim();
+      var inspect = await RunAsync("", "inspect", url, "--bearer", "url-token-456", "--era", era);
+      Assert.Equal(0, inspect.Code);
+      Assert.Contains($"protocol: {version}", inspect.Out);
+      Assert.Contains("echo", inspect.Out);
+      var call = await RunAsync("", "call", url, "add", "--arg", "a=2", "--arg", "b=40", "--bearer", "url-token-456", "--era", era);
+      Assert.Equal((0, "42"), (call.Code, call.Out.Trim()));
+      var read = await RunAsync("", "read", url, "test://hello", "--bearer", "url-token-456", "--era", era);
+      Assert.Equal((0, "hello"), (read.Code, read.Out.Trim()));
+      var prompt = await RunAsync("", "prompt", url, "greet", "--bearer", "url-token-456", "--era", era);
+      Assert.Equal((0, "user: Say hello."), (prompt.Code, prompt.Out.Trim()));
+
+      // A refused credential fails the connection; the token never appears in what the tool prints.
+      var refused = await RunAsync("", "inspect", url, "--bearer", "wrong", "--era", era);
+      Assert.NotEqual(0, refused.Code);
+      Assert.DoesNotContain("wrong", refused.Out + refused.Err, StringComparison.Ordinal);
+    }
+    finally
+    {
+      await stop.CancelAsync();
+    }
+
+    Assert.Equal(0, await run);
+  }
+
+  [Fact]
+  public async Task AnUnreachableUrlExitsThree()
+  {
+    var (code, _, err) = await RunAsync("", "inspect", "http://127.0.0.1:1/mcp");
+    Assert.Equal(3, code);
+    Assert.StartsWith("onemodelcontext:", err);
+  }
+
+  [Fact]
+  public async Task AUrlWithCredentialsIsAUsageError()
+  {
+    var (code, _, _) = await RunAsync("", "inspect", "http://user:pw@127.0.0.1:1/mcp");
+    Assert.Equal(2, code);
+  }
 }
