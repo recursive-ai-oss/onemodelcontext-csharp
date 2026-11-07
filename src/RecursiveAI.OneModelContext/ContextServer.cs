@@ -8,6 +8,7 @@ using RecursiveAI.OneModelContext.Diagnostics;
 using RecursiveAI.OneModelContext.JsonRpc;
 using RecursiveAI.OneModelContext.Protocol;
 using RecursiveAI.OneModelContext.Wire;
+using RecursiveAI.OneModelContext.Wire.Modern;
 
 namespace RecursiveAI.OneModelContext;
 
@@ -50,6 +51,25 @@ public sealed class ContextServerOptions
   /// <summary>The clock for timeouts and durations. Default <see cref="TimeProvider.System"/>.</summary>
   public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
+  /// <summary>
+  /// The secret that protects <c>requestState</c> (2026-07-28 multi round-trip requests), at least 32 bytes. Servers that run as several
+  /// instances behind one endpoint need the same key on each, so any instance can verify what another issued. Default <c>null</c>: a random
+  /// key per server object, which suits a single process; state from another process or an earlier run is then refused.
+  /// </summary>
+  public byte[]? RequestStateKey { get; init; }
+
+  /// <summary>
+  /// Seal <c>requestState</c> with AES-GCM so the client cannot read it, not only tamper-proof with HMAC-SHA256. Default <c>false</c>.
+  /// Turn it on when <see cref="RequestContext.State"/> holds something the client mustn't see.
+  /// </summary>
+  public bool EncryptRequestState { get; init; }
+
+  /// <summary>How long a <c>requestState</c> stays valid after it was issued. Default 10 minutes.</summary>
+  public TimeSpan RequestStateLifetime { get; init; } = TimeSpan.FromMinutes(10);
+
+  /// <summary>The largest <c>requestState</c> payload the server will issue, in bytes before encoding. Default 256 KiB.</summary>
+  public int MaxRequestStateBytes { get; init; } = 256 * 1024;
+
   /// <summary>The codecs to use, in place of the built-in ones. Default: the modern codec, then the legacy codec.</summary>
   public IReadOnlyList<IServerCodec>? Codecs { get; init; }
 }
@@ -69,6 +89,7 @@ public sealed class ContextServer : IServerHost
 {
   private readonly IReadOnlyList<IServerCodec> _codecs;
   private readonly ServerFeatures _features;
+  private readonly Wire.Modern.RequestStateProtector _stateProtector;
 
   /// <summary>Creates a server.</summary>
   /// <param name="info">Its name and version, reported to clients.</param>
@@ -80,6 +101,11 @@ public sealed class ContextServer : IServerHost
     Options = options ?? new ContextServerOptions();
     _codecs = Options.Codecs ?? DefaultCodecs.Server();
     _features = new ServerFeatures(this);
+    _stateProtector = new Wire.Modern.RequestStateProtector(Options.RequestStateKey, Options.EncryptRequestState, Options.RequestStateLifetime, Options.MaxRequestStateBytes, Options.TimeProvider);
+    Tools.Changed += (_, _) => Events.Raise(new ServerEvent(ServerEventKind.ToolsListChanged));
+    Prompts.Changed += (_, _) => Events.Raise(new ServerEvent(ServerEventKind.PromptsListChanged));
+    Resources.Changed += (_, _) => Events.Raise(new ServerEvent(ServerEventKind.ResourcesListChanged));
+    ResourceTemplates.Changed += (_, _) => Events.Raise(new ServerEvent(ServerEventKind.ResourcesListChanged));
   }
 
   /// <summary>Creates a server.</summary>
@@ -130,6 +156,41 @@ public sealed class ContextServer : IServerHost
 
   /// <inheritdoc />
   public TimeProvider TimeProvider => Options.TimeProvider;
+
+  /// <inheritdoc />
+  public TimeSpan CacheTtl => Options.ListCacheTtl;
+
+  /// <inheritdoc />
+  public string CacheScope => Options.ListCacheScope;
+
+  internal ServerEvents Events { get; } = new();
+
+  /// <summary>
+  /// Tells clients that listen for it that the tool list changed. Adding or removing a tool does this by itself; call it when a tool
+  /// definition changed in place. Modern clients hear it on a <c>subscriptions/listen</c> stream they opened with <c>toolsListChanged</c>.
+  /// </summary>
+  public void NotifyToolsListChanged() => Events.Raise(new ServerEvent(ServerEventKind.ToolsListChanged));
+
+  /// <summary>Tells clients that listen for it that the prompt list changed. Registry changes do this by themselves.</summary>
+  public void NotifyPromptsListChanged() => Events.Raise(new ServerEvent(ServerEventKind.PromptsListChanged));
+
+  /// <summary>Tells clients that listen for it that the resource list changed. Registry changes do this by themselves.</summary>
+  public void NotifyResourcesListChanged() => Events.Raise(new ServerEvent(ServerEventKind.ResourcesListChanged));
+
+  /// <summary>Tells the clients that subscribed to <paramref name="uri"/> (<c>resourceSubscriptions</c>) that the resource changed.</summary>
+  /// <param name="uri">The resource URI, exactly as the client subscribed to it.</param>
+  /// <exception cref="ArgumentNullException"><paramref name="uri"/> is null.</exception>
+  public void NotifyResourceUpdated(string uri)
+  {
+    ArgumentNullException.ThrowIfNull(uri);
+    Events.Raise(new ServerEvent(ServerEventKind.ResourceUpdated, uri));
+  }
+
+  /// <summary>
+  /// Ends every open <c>subscriptions/listen</c> stream the graceful way: each is answered with a final result, as the revision asks for
+  /// when a server shuts down on purpose.
+  /// </summary>
+  public void EndSubscriptions() => Events.Raise(new ServerEvent(ServerEventKind.Shutdown));
 
   internal static JsonElement EmptyObject { get; } = JsonDocument.Parse("{}").RootElement;
 
@@ -259,10 +320,10 @@ public sealed class ContextServer : IServerHost
     CancellationToken cancellationToken)
   {
     var started = TimeProvider.GetTimestamp();
-    using var activity = ContextDiagnostics.Source.StartActivity(request.Method, System.Diagnostics.ActivityKind.Server);
     var era = CodecSelector.Select(request.Method, request.Params, session, hasLegacySessionId);
     var codec = FindCodec(era);
     string? name = ServerFeatures.NameOf(request.Method, request.Params);
+    using var activity = StartActivity(request, name);
     var outcome = RequestOutcome.Success;
     int? errorCode = null;
     PeerContext? peer = null;
@@ -282,16 +343,57 @@ public sealed class ContextServer : IServerHost
         {
           outcome = RequestOutcome.ProtocolError;
           errorCode = rejected.Error.Code;
+          ContextDiagnostics.Publish(DiagnosticKind.InvalidMessage, "A request was rejected with error " + rejected.Error.Code + ".", request.Method);
         }
 
         return direct;
       }
 
       peer = decision.Peer!;
-      var context = new RequestContext(this, request.Method, name, peer, sink, codec.CreateInputChannel(peer, session, sink), principal, cancellationToken);
+
+      // 2026-07-28 mrtr: only these requests may be answered with input_required, and only they carry requestState we act on.
+      var canAskForInput = request.Method is Methods.ToolsCall or Methods.PromptsGet or Methods.ResourcesRead;
+      StateBinding? binding = null;
+      if (canAskForInput && peer.RequestState is { } presented)
+      {
+        binding = BindState(request, name, principal);
+
+        // basic/patterns/mrtr, server requirement 4: requestState is attacker-controlled; state that fails verification is rejected.
+        if (!_stateProtector.TryOpen(presented, binding.Value, out var opened))
+        {
+          outcome = RequestOutcome.ProtocolError;
+          errorCode = JsonRpcErrorCodes.InvalidParams;
+          ContextDiagnostics.Publish(DiagnosticKind.InvalidMessage, "A requestState was refused (tampered, expired or presented by another caller or for another request).", request.Method);
+          return codec.EncodeError(request.Id, peer, new ProtocolException(JsonRpcErrorCodes.InvalidParams, "Invalid params: the requestState is not valid."));
+        }
+
+        peer = peer.Clone();
+        peer.RestoredState = opened.State;
+
+        // Answers from earlier rounds travel inside the state, so a handler run again from the start finds all of them; this round's win.
+        var answers = opened.Answers is null ? new Dictionary<string, JsonElement>(StringComparer.Ordinal) : new Dictionary<string, JsonElement>(opened.Answers, StringComparer.Ordinal);
+        if (decision.Peer!.InputResponses is { } fresh)
+        {
+          foreach (var (key, value) in fresh)
+          {
+            answers[key] = value;
+          }
+        }
+
+        peer.InputResponses = answers;
+      }
+
+      var channel = codec.CreateInputChannel(peer, session, sink);
+      var context = new RequestContext(this, request.Method, name, peer, sink, channel, principal, cancellationToken, request.Id);
       try
       {
         var result = await _features.HandleAsync(request.Method, request.Params, context).ConfigureAwait(false);
+        if (channel is Wire.Modern.IPendingInput pendingInput && pendingInput.TryTakePending(out var swallowed))
+        {
+          // The handler asked, was told to wait, and carried on anyway: what it returned was built without the answer.
+          return EncodeInputRequired(swallowed, serverBuilt: true);
+        }
+
         if (result is CallToolResult { IsError: true })
         {
           outcome = RequestOutcome.ToolError;
@@ -301,14 +403,45 @@ public sealed class ContextServer : IServerHost
       }
       catch (InputRequiredException needsInput)
       {
-        outcome = RequestOutcome.InputRequired;
-        return codec.EncodeResult(request.Id, peer, needsInput.Result, this);
+        return EncodeInputRequired(needsInput.Result, needsInput.IsServerBuilt);
       }
       catch (ProtocolException error)
       {
         outcome = RequestOutcome.ProtocolError;
         errorCode = error.Code;
         return codec.EncodeError(request.Id, peer, error);
+      }
+
+      JsonRpcMessage EncodeInputRequired(InputRequiredResult asked, bool serverBuilt)
+      {
+        if (!canAskForInput)
+        {
+          outcome = RequestOutcome.ProtocolError;
+          errorCode = JsonRpcErrorCodes.InternalError;
+          return codec.EncodeError(request.Id, peer, new ProtocolException(JsonRpcErrorCodes.InternalError, "Internal error."));
+        }
+
+        if (serverBuilt)
+        {
+          try
+          {
+            var sealedState = _stateProtector.Seal(
+              binding ?? BindState(request, name, principal),
+              new Dictionary<string, string>(context.State, StringComparer.Ordinal),
+              peer.InputResponses is null ? null : new Dictionary<string, JsonElement>(peer.InputResponses, StringComparer.Ordinal));
+            asked = new InputRequiredResult { ResultType = WireNames.ResultTypeInputRequired, InputRequests = asked.InputRequests, RequestState = sealedState, Meta = asked.Meta, AdditionalProperties = asked.AdditionalProperties };
+          }
+          catch (InvalidOperationException ex)
+          {
+            outcome = RequestOutcome.Failed;
+            errorCode = JsonRpcErrorCodes.InternalError;
+            ContextDiagnostics.Publish(DiagnosticKind.HandlerFault, "The requestState exceeded MaxRequestStateBytes.", request.Method, ex);
+            return codec.EncodeError(request.Id, peer, new ProtocolException(JsonRpcErrorCodes.InternalError, "Internal error."));
+          }
+        }
+
+        outcome = RequestOutcome.InputRequired;
+        return codec.EncodeResult(request.Id, peer, asked, this);
       }
     }
     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -327,11 +460,60 @@ public sealed class ContextServer : IServerHost
     }
     finally
     {
-      Finish(request.Method, name, outcome, errorCode, peer?.ClientInfo ?? session.ClientInfo, principal, codec?.Era, started, activity);
+      Finish(request.Method, name, outcome, errorCode, peer, session.ClientInfo, principal, codec?.Era, started, activity);
     }
   }
 
-  private void Finish(string method, string? name, RequestOutcome outcome, int? errorCode, Implementation? clientInfo, ClaimsPrincipal? principal, ProtocolEra? era, long started, System.Diagnostics.Activity? activity)
+  // A request span follows the OTel MCP conventions: "{method} {target}", parented on the caller's trace context (SEP-414) when it sent one.
+  private static System.Diagnostics.Activity? StartActivity(JsonRpcRequest request, string? name)
+  {
+    if (!ContextDiagnostics.Source.HasListeners())
+    {
+      return null;
+    }
+
+    var spanName = name is null ? request.Method : request.Method + " " + name;
+    return TraceContext.TryRead(request.Params, out var parent)
+      ? ContextDiagnostics.Source.StartActivity(spanName, System.Diagnostics.ActivityKind.Server, parent)
+      : ContextDiagnostics.Source.StartActivity(spanName, System.Diagnostics.ActivityKind.Server);
+  }
+
+  // What a requestState is tied to (basic/patterns/mrtr, server requirement 5): the caller, the method, the target and the parameters.
+  private static StateBinding BindState(JsonRpcRequest request, string? name, ClaimsPrincipal? principal)
+  {
+    var buffer = new System.Buffers.ArrayBufferWriter<byte>();
+    using (var writer = new Utf8JsonWriter(buffer))
+    {
+      writer.WriteStartObject();
+      if (request.Params.ValueKind == JsonValueKind.Object)
+      {
+        foreach (var property in request.Params.EnumerateObject())
+        {
+          if (property.NameEquals("_meta") || property.NameEquals("inputResponses") || property.NameEquals("requestState"))
+          {
+            continue;
+          }
+
+          property.WriteTo(writer);
+        }
+      }
+
+      writer.WriteEndObject();
+    }
+
+    var digest = Wire.Modern.Base64Url.Encode(System.Security.Cryptography.SHA256.HashData(buffer.WrittenSpan));
+    var who = string.Empty;
+    if (principal?.Identity is { IsAuthenticated: true } identity)
+    {
+      var subject = principal.FindFirst("sub")?.Value ?? principal.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? identity.Name ?? "authenticated";
+      var issuer = principal.FindFirst("iss")?.Value;
+      who = issuer is null ? subject : issuer + "|" + subject;
+    }
+
+    return new StateBinding(request.Method, name, who, digest);
+  }
+
+  private void Finish(string method, string? name, RequestOutcome outcome, int? errorCode, PeerContext? peer, Implementation? sessionClientInfo, ClaimsPrincipal? principal, ProtocolEra? era, long started, System.Diagnostics.Activity? activity)
   {
     var elapsed = TimeProvider.GetElapsedTime(started);
     if (ContextDiagnostics.ServerDuration.Enabled)
@@ -339,6 +521,7 @@ public sealed class ContextServer : IServerHost
       ContextDiagnostics.ServerDuration.Record(
         elapsed.TotalSeconds,
         new KeyValuePair<string, object?>("mcp.method.name", method),
+        new KeyValuePair<string, object?>("mcp.protocol.version", peer?.ProtocolVersion),
         new KeyValuePair<string, object?>("mcp.protocol.era", era?.ToString().ToLowerInvariant()),
         new KeyValuePair<string, object?>("error.type", outcome is RequestOutcome.Success ? null : outcome.ToString()));
     }
@@ -346,10 +529,17 @@ public sealed class ContextServer : IServerHost
     if (activity is not null)
     {
       activity.SetTag("mcp.method.name", method);
+      activity.SetTag("mcp.protocol.version", peer?.ProtocolVersion);
       activity.SetTag("mcp.protocol.era", era?.ToString().ToLowerInvariant());
       if (name is not null)
       {
-        activity.SetTag("gen_ai.tool.name", method == Methods.ToolsCall ? name : null);
+        activity.SetTag(method switch
+        {
+          Methods.ToolsCall => "gen_ai.tool.name",
+          Methods.PromptsGet => "gen_ai.prompt.name",
+          Methods.ResourcesRead => "mcp.resource.uri",
+          _ => "mcp.target",
+        }, name);
       }
 
       if (outcome is not RequestOutcome.Success)
@@ -362,7 +552,7 @@ public sealed class ContextServer : IServerHost
     {
       try
       {
-        audit(new AuditRecord(principal, clientInfo, method, name, outcome, errorCode, era, elapsed));
+        audit(new AuditRecord(principal, peer?.ClientInfo ?? sessionClientInfo, method, name, outcome, errorCode, era, elapsed));
       }
       catch (Exception ex)
       {

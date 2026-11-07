@@ -220,18 +220,32 @@ public sealed class ToolException : ContextException
 
 /// <summary>
 /// Thrown inside a handler when it asks for input that is not available yet, so the attempt ends with an <c>input_required</c> result
-/// (2026-07-28). Handlers do not catch it.
+/// (2026-07-28). Handlers do not catch it. A handler that builds one itself owns the integrity of any <c>requestState</c> it puts in the
+/// result; the asks made through <see cref="RequestContext"/> are protected by the server.
 /// </summary>
 public sealed class InputRequiredException : ContextException
 {
+  private readonly Func<InputRequiredResult>? _factory;
+  private InputRequiredResult? _result;
+
   /// <summary>Creates the exception.</summary>
   /// <param name="result">The result that asks the client for input.</param>
   public InputRequiredException(InputRequiredResult result)
     : base("The request needs input from the client.")
   {
-    Result = result;
+    _result = result;
+  }
+
+  // The asks of one attempt are collected until the handler is done with it, so the result is built when the server asks for it.
+  internal InputRequiredException(Func<InputRequiredResult> factory)
+    : base("The request needs input from the client.")
+  {
+    _factory = factory;
   }
 
   /// <summary>The result to send instead of the handler's.</summary>
-  public InputRequiredResult Result { get; }
+  public InputRequiredResult Result => _result ??= _factory!();
+
+  /// <summary>True when the server built the result from the asks the handler made; its <c>requestState</c> is then added and protected by the server.</summary>
+  internal bool IsServerBuilt => _factory is not null;
 }

@@ -38,11 +38,20 @@ public sealed class PeerContext
   /// <summary>The request's <c>_meta</c> as received, for trace context and extension keys.</summary>
   public MetaObject? Meta { get; init; }
 
-  /// <summary>2026-07-28 retries: the client's answers to earlier input requests, by key.</summary>
-  public IReadOnlyDictionary<string, JsonElement>? InputResponses { get; init; }
+  /// <summary>
+  /// 2026-07-28 retries: the client's answers to earlier input requests, by key. The server adds the answers carried inside a verified
+  /// <see cref="RequestState"/>, so a flow of several rounds sees every answer it was given.
+  /// </summary>
+  public IReadOnlyDictionary<string, JsonElement>? InputResponses { get; internal set; }
+
+  /// <summary>2026-07-28 retries: the <c>requestState</c> exactly as the client sent it. Not yet verified; the server verifies it before any handler runs.</summary>
+  public string? RequestState { get; init; }
 
   /// <summary>Handler state restored from a verified <c>requestState</c>; becomes <see cref="RequestContext.State"/>.</summary>
-  public IReadOnlyDictionary<string, string>? RestoredState { get; init; }
+  public IReadOnlyDictionary<string, string>? RestoredState { get; internal set; }
+
+  /// <summary>A copy the server completes with verified state; the codec's own instance is never changed.</summary>
+  internal PeerContext Clone() => (PeerContext)MemberwiseClone();
 }
 
 /// <summary>
@@ -112,6 +121,12 @@ public interface IServerHost
 
   /// <summary>The clock for timeouts, cache lifetimes and state expiry.</summary>
   TimeProvider TimeProvider { get; }
+
+  /// <summary>How long clients may reuse list results and discovery (2026-07-28 <c>ttlMs</c>). Default zero.</summary>
+  TimeSpan CacheTtl => TimeSpan.Zero;
+
+  /// <summary>Who may reuse them (2026-07-28 <c>cacheScope</c>): <c>private</c> or <c>public</c>. Default <c>private</c>.</summary>
+  string CacheScope => "private";
 }
 
 /// <summary>A codec's verdict on an incoming request.</summary>

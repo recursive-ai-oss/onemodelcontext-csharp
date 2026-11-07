@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Text.Json;
@@ -52,6 +53,18 @@ public sealed class ContextClientOptions
   /// <summary>How long a request waits for its response. Default 5 minutes.</summary>
   public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromMinutes(5);
 
+  /// <summary>
+  /// Most times one call may be sent again because the server asked for input (2026-07-28 multi round-trip requests). The call fails after
+  /// that many rounds. Default 8.
+  /// </summary>
+  public int MaxInputRounds { get; init; } = 8;
+
+  /// <summary>
+  /// Reuse list and read results for as long as the server says they stay fresh (2026-07-28 <c>ttlMs</c>), and drop them when the server
+  /// announces a change. Default <c>true</c>. A server that sends no <c>ttlMs</c>, or zero, is never cached.
+  /// </summary>
+  public bool CacheResults { get; init; } = true;
+
   /// <summary>Most pages followed when listing everything. Default 100.</summary>
   public int MaxListPages { get; init; } = 100;
 
@@ -76,6 +89,9 @@ public sealed class ContextClient : IAsyncDisposable
   private readonly ClientHello _hello;
   private readonly ContextClientOptions _options;
   private readonly Task<JsonRpcCloseReason> _run;
+  private readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.Ordinal);
+  private readonly ConcurrentDictionary<string, IProgress<ProgressNotificationParams>> _progress = new(StringComparer.Ordinal);
+  private long _progressCounter;
 
   private ContextClient(JsonRpcConnection rpc, ClientSession session, ClientHello hello, ContextClientOptions options, Task<JsonRpcCloseReason> run)
   {
@@ -125,7 +141,7 @@ public sealed class ContextClient : IAsyncDisposable
       RequestHandler = (request, ct) => holder.Client?.HandleServerRequestAsync(request, ct) ?? ValueTask.FromResult<JsonRpcMessage?>(null),
       NotificationHandler = (notification, _) =>
       {
-        holder.Client?.NotificationReceived?.Invoke(notification);
+        holder.Client?.OnNotification(notification);
         return ValueTask.CompletedTask;
       },
       OutgoingRequestCancelled = id => NotifyCancelledAsync(holder, id),
@@ -188,7 +204,7 @@ public sealed class ContextClient : IAsyncDisposable
   /// <param name="cursor">The previous page's <c>nextCursor</c>, or null for the first page.</param>
   /// <param name="cancellationToken">Cancels the call.</param>
   public ValueTask<ListToolsResult> ListToolsPageAsync(string? cursor = null, CancellationToken cancellationToken = default) =>
-    CallAsync<ListToolsResult>(Methods.ToolsList, new PaginatedRequestParams { Cursor = cursor }, cancellationToken);
+    CallAsync<ListToolsResult>(Methods.ToolsList, new PaginatedRequestParams { Cursor = cursor }, cancellationToken, cacheKey: Methods.ToolsList + "\0" + cursor);
 
   /// <summary>Lists every resource.</summary>
   /// <param name="cancellationToken">Cancels the call.</param>
@@ -214,7 +230,7 @@ public sealed class ContextClient : IAsyncDisposable
   /// <param name="cursor">The previous page's <c>nextCursor</c>, or null for the first page.</param>
   /// <param name="cancellationToken">Cancels the call.</param>
   public ValueTask<ListResourcesResult> ListResourcesPageAsync(string? cursor = null, CancellationToken cancellationToken = default) =>
-    CallAsync<ListResourcesResult>(Methods.ResourcesList, new PaginatedRequestParams { Cursor = cursor }, cancellationToken);
+    CallAsync<ListResourcesResult>(Methods.ResourcesList, new PaginatedRequestParams { Cursor = cursor }, cancellationToken, cacheKey: Methods.ResourcesList + "\0" + cursor);
 
   /// <summary>Lists every resource template.</summary>
   /// <param name="cancellationToken">Cancels the call.</param>
@@ -224,7 +240,7 @@ public sealed class ContextClient : IAsyncDisposable
     string? cursor = null;
     for (var page = 0; page < _options.MaxListPages; page++)
     {
-      var result = await CallAsync<ListResourceTemplatesResult>(Methods.ResourcesTemplatesList, new PaginatedRequestParams { Cursor = cursor }, cancellationToken).ConfigureAwait(false);
+      var result = await CallAsync<ListResourceTemplatesResult>(Methods.ResourcesTemplatesList, new PaginatedRequestParams { Cursor = cursor }, cancellationToken, cacheKey: Methods.ResourcesTemplatesList + "\0" + cursor).ConfigureAwait(false);
       all.AddRange(result.ResourceTemplates);
       cursor = result.NextCursor;
       if (cursor is null)
@@ -244,7 +260,7 @@ public sealed class ContextClient : IAsyncDisposable
     string? cursor = null;
     for (var page = 0; page < _options.MaxListPages; page++)
     {
-      var result = await CallAsync<ListPromptsResult>(Methods.PromptsList, new PaginatedRequestParams { Cursor = cursor }, cancellationToken).ConfigureAwait(false);
+      var result = await CallAsync<ListPromptsResult>(Methods.PromptsList, new PaginatedRequestParams { Cursor = cursor }, cancellationToken, cacheKey: Methods.PromptsList + "\0" + cursor).ConfigureAwait(false);
       all.AddRange(result.Prompts);
       cursor = result.NextCursor;
       if (cursor is null)
@@ -267,6 +283,21 @@ public sealed class ContextClient : IAsyncDisposable
     return CallAsync<CallToolResult>(Methods.ToolsCall, new CallToolRequestParams { Name = name, Arguments = arguments }, cancellationToken);
   }
 
+  /// <summary>Calls a tool and reports the progress the server sends while it works.</summary>
+  /// <param name="name">The tool name.</param>
+  /// <param name="arguments">The arguments object, or <c>default</c> for none.</param>
+  /// <param name="progress">Receives each progress notification of this call, in order. It is called on the connection's read loop, so it should return quickly.</param>
+  /// <param name="cancellationToken">Cancels the call; the server is told.</param>
+  /// <exception cref="ProtocolException">The server rejected the call (unknown tool, bad arguments).</exception>
+  public ValueTask<CallToolResult> CallToolAsync(string name, JsonElement arguments, IProgress<ProgressNotificationParams>? progress, CancellationToken cancellationToken = default)
+  {
+    ArgumentNullException.ThrowIfNull(name);
+    return CallAsync<CallToolResult>(Methods.ToolsCall, new CallToolRequestParams { Name = name, Arguments = arguments }, cancellationToken, progress);
+  }
+
+  /// <summary>Forgets every cached list and read result, so the next call asks the server again.</summary>
+  public void InvalidateCache() => _cache.Clear();
+
   /// <summary>Reads a resource.</summary>
   /// <param name="uri">The resource URI.</param>
   /// <param name="cancellationToken">Cancels the call.</param>
@@ -274,7 +305,7 @@ public sealed class ContextClient : IAsyncDisposable
   public ValueTask<ReadResourceResult> ReadResourceAsync(string uri, CancellationToken cancellationToken = default)
   {
     ArgumentNullException.ThrowIfNull(uri);
-    return CallAsync<ReadResourceResult>(Methods.ResourcesRead, new ReadResourceRequestParams { Uri = uri }, cancellationToken);
+    return CallAsync<ReadResourceResult>(Methods.ResourcesRead, new ReadResourceRequestParams { Uri = uri }, cancellationToken, cacheKey: Methods.ResourcesRead + "\0" + uri);
   }
 
   /// <summary>Gets a prompt.</summary>
@@ -322,7 +353,7 @@ public sealed class ContextClient : IAsyncDisposable
       throw new ContextException("No protocol codec is available for era preference " + options.Era + ".");
     }
 
-    throw new ProtocolVersionException(options.SupportedVersions, []);
+    throw new ProtocolVersionException(options.SupportedVersions, hello.ServerVersionsSeen);
   }
 
   private static async ValueTask NotifyCancelledAsync(Holder holder, JsonRpcId id)
@@ -331,48 +362,216 @@ public sealed class ContextClient : IAsyncDisposable
     await holder.Rpc!.SendNotificationAsync(Methods.NotificationsCancelled, parameters).ConfigureAwait(false);
   }
 
-  private async ValueTask<T> CallAsync<T>(string method, RequestParams parameters, CancellationToken cancellationToken)
+  private async ValueTask<T> CallAsync<T>(string method, RequestParams parameters, CancellationToken cancellationToken, IProgress<ProgressNotificationParams>? progress = null, string? cacheKey = null)
     where T : Result
   {
     var started = _options.TimeProvider.GetTimestamp();
-    using var activity = ContextDiagnostics.Source.StartActivity(method, System.Diagnostics.ActivityKind.Client);
+    using var activity = ContextDiagnostics.Source.HasListeners() ? ContextDiagnostics.Source.StartActivity(method, System.Diagnostics.ActivityKind.Client) : null;
+    string? progressToken = null;
     try
     {
-      var encoded = _session.Codec.EncodeParams(_session, _hello, method, parameters);
-      JsonElement raw;
-      try
+      if (cacheKey is not null && _options.CacheResults && TryGetFresh(cacheKey) is T cached)
       {
-        raw = await _rpc.SendRequestAsync(method, encoded, cancellationToken).ConfigureAwait(false);
-      }
-      catch (JsonRpcRemoteException remote)
-      {
-        throw ProtocolException.FromError(remote.Error);
-      }
-      catch (JsonRpcClosedException closed)
-      {
-        throw new TransportException("The connection closed before the server answered '" + method + "'.", closed);
+        return cached;
       }
 
-      var result = _session.Codec.DecodeResult(_session, method, raw);
-      if (result is InputRequiredResult)
+      if (progress is not null)
       {
-        // Answering input requests and retrying is the session layer's job; until it exists the call cannot finish.
-        throw new ContextException("The server asked for input to finish '" + method + "', which this client cannot answer yet.");
+        progressToken = "progress-" + Interlocked.Increment(ref _progressCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _progress[progressToken] = progress;
+        parameters = WithProgressToken(parameters, progressToken);
       }
 
-      return result as T ?? throw new ProtocolException(JsonRpcErrorCodes.InternalError, "The result of '" + method + "' has an unexpected type.");
+      var rounds = 0;
+      while (true)
+      {
+        var encoded = _session.Codec.EncodeParams(_session, _hello, method, parameters);
+        JsonElement raw;
+        try
+        {
+          raw = await _rpc.SendRequestAsync(method, encoded, cancellationToken).ConfigureAwait(false);
+        }
+        catch (JsonRpcRemoteException remote)
+        {
+          throw ProtocolException.FromError(remote.Error);
+        }
+        catch (JsonRpcClosedException closed)
+        {
+          throw new TransportException("The connection closed before the server answered '" + method + "'.", closed);
+        }
+
+        var result = _session.Codec.DecodeResult(_session, method, raw);
+        if (result is not InputRequiredResult inputRequired)
+        {
+          var typed = result as T ?? throw new ProtocolException(JsonRpcErrorCodes.InternalError, "The result of '" + method + "' has an unexpected type.");
+
+          // 2026-07-28 caching: a result produced by a retry depends on inputs that are not in the cache key, so it is never kept.
+          if (cacheKey is not null && rounds == 0 && _options.CacheResults)
+          {
+            Store(cacheKey, typed);
+          }
+
+          return typed;
+        }
+
+        // 2026-07-28 basic/patterns/mrtr: answer what the server asked, then send the same request again with the answers and the
+        // server's state echoed back untouched. The retry is a new request with a new id.
+        if (++rounds > _options.MaxInputRounds)
+        {
+          throw new ContextException("The server asked for input more than " + _options.MaxInputRounds + " times to finish '" + method + "'.");
+        }
+
+        parameters = await AnswerAsync(method, parameters, inputRequired, cancellationToken).ConfigureAwait(false);
+      }
     }
     finally
     {
+      if (progressToken is not null)
+      {
+        _progress.TryRemove(progressToken, out _);
+      }
+
       if (ContextDiagnostics.ClientDuration.Enabled)
       {
         ContextDiagnostics.ClientDuration.Record(
           _options.TimeProvider.GetElapsedTime(started).TotalSeconds,
           new KeyValuePair<string, object?>("mcp.method.name", method),
+          new KeyValuePair<string, object?>("mcp.protocol.version", ProtocolVersion),
           new KeyValuePair<string, object?>("mcp.protocol.era", Era.ToString().ToLowerInvariant()));
       }
     }
   }
+
+  private async ValueTask<RequestParams> AnswerAsync(string method, RequestParams parameters, InputRequiredResult asked, CancellationToken cancellationToken)
+  {
+    if (asked.InputRequests is not { Count: > 0 } && asked.RequestState is null)
+    {
+      throw new ProtocolException(JsonRpcErrorCodes.InternalError, "The server's input_required result for '" + method + "' has neither inputRequests nor requestState.");
+    }
+
+    var responses = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+    if (asked.InputRequests is { } requests)
+    {
+      foreach (var (key, request) in requests)
+      {
+        if (request.Method is not (Methods.ElicitationCreate or Methods.SamplingCreateMessage or Methods.RootsList))
+        {
+          throw new ProtocolException(JsonRpcErrorCodes.InternalError, "The server asked for input with the unknown method '" + request.Method + "'.");
+        }
+
+        if (_options.RequestHandler is not { } handler)
+        {
+          throw new ContextException("The server asked the client for input (" + request.Method + ") to finish '" + method + "', and no RequestHandler is configured.");
+        }
+
+        var answer = await handler.HandleAsync(request.Method, request.Params, cancellationToken).ConfigureAwait(false);
+        var info = WireJsonContext.Default.GetTypeInfo(answer.GetType())
+          ?? throw new InvalidOperationException("The handler returned a result type that is not a protocol record.");
+        responses[key] = JsonSerializer.SerializeToElement(answer, info);
+      }
+    }
+
+    // The state is echoed exactly when the server sent one, and not at all when it did not.
+    return parameters switch
+    {
+      CallToolRequestParams p => new CallToolRequestParams { Name = p.Name, Arguments = p.Arguments, Meta = p.Meta, AdditionalProperties = p.AdditionalProperties, InputResponses = responses, RequestState = asked.RequestState },
+      GetPromptRequestParams p => new GetPromptRequestParams { Name = p.Name, Arguments = p.Arguments, Meta = p.Meta, AdditionalProperties = p.AdditionalProperties, InputResponses = responses, RequestState = asked.RequestState },
+      ReadResourceRequestParams p => new ReadResourceRequestParams { Uri = p.Uri, Meta = p.Meta, AdditionalProperties = p.AdditionalProperties, InputResponses = responses, RequestState = asked.RequestState },
+      _ => throw new ProtocolException(JsonRpcErrorCodes.InternalError, "The server asked for input to finish '" + method + "', which does not support it."),
+    };
+  }
+
+  private static RequestParams WithProgressToken(RequestParams parameters, string token)
+  {
+    var meta = new MetaObject { ProgressToken = JsonRpcId.FromString(token), AdditionalProperties = parameters.Meta?.AdditionalProperties };
+    return parameters switch
+    {
+      CallToolRequestParams p => new CallToolRequestParams { Name = p.Name, Arguments = p.Arguments, Meta = meta, AdditionalProperties = p.AdditionalProperties, InputResponses = p.InputResponses, RequestState = p.RequestState },
+      _ => parameters,
+    };
+  }
+
+  private void OnNotification(JsonRpcNotification notification)
+  {
+    switch (notification.Method)
+    {
+      case Methods.NotificationsProgress:
+        if (!_progress.IsEmpty && notification.Params.ValueKind == JsonValueKind.Object)
+        {
+          try
+          {
+            var update = notification.Params.Deserialize(WireJsonContext.Default.ProgressNotificationParams);
+            if (update is not null && _progress.TryGetValue(update.ProgressToken.Text, out var sink))
+            {
+              sink.Report(update);
+            }
+          }
+          catch (JsonException)
+          {
+            // A malformed progress notification is dropped; it never ends the connection.
+          }
+        }
+
+        break;
+      case Methods.NotificationsToolsListChanged:
+        DropCached(Methods.ToolsList);
+        break;
+      case Methods.NotificationsPromptsListChanged:
+        DropCached(Methods.PromptsList);
+        break;
+      case Methods.NotificationsResourcesListChanged:
+        DropCached(Methods.ResourcesList);
+        DropCached(Methods.ResourcesTemplatesList);
+        break;
+      case Methods.NotificationsResourcesUpdated:
+        if (notification.Params.ValueKind == JsonValueKind.Object && notification.Params.TryGetProperty("uri", out var uri) && uri.ValueKind == JsonValueKind.String)
+        {
+          _cache.TryRemove(Methods.ResourcesRead + "\0" + uri.GetString(), out _);
+        }
+
+        break;
+    }
+
+    NotificationReceived?.Invoke(notification);
+  }
+
+  // 2026-07-28 server/utilities/caching: fresh while now < received + ttlMs; a missing, zero or negative ttlMs means never reuse.
+  private Result? TryGetFresh(string key)
+  {
+    if (_cache.TryGetValue(key, out var entry))
+    {
+      if (_options.TimeProvider.GetElapsedTime(entry.Received).TotalMilliseconds < entry.TtlMs)
+      {
+        return entry.Result;
+      }
+
+      _cache.TryRemove(key, out _);
+    }
+
+    return null;
+  }
+
+  private void Store(string key, Result result)
+  {
+    if (result is CacheableResult { TtlMs: > 0 } cacheable && cacheable.EffectiveResultType == WireNames.ResultTypeComplete)
+    {
+      _cache[key] = new CacheEntry(result, _options.TimeProvider.GetTimestamp(), cacheable.TtlMs.Value);
+    }
+  }
+
+  private void DropCached(string method)
+  {
+    var prefix = method + "\0";
+    foreach (var key in _cache.Keys)
+    {
+      if (key.StartsWith(prefix, StringComparison.Ordinal))
+      {
+        _cache.TryRemove(key, out _);
+      }
+    }
+  }
+
+  private sealed record CacheEntry(Result Result, long Received, long TtlMs);
 
   // Server-initiated requests (legacy sampling, roots and elicitation) go to the handler the application supplied.
   private async ValueTask<JsonRpcMessage?> HandleServerRequestAsync(JsonRpcRequest request, CancellationToken cancellationToken)

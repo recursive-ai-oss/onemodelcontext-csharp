@@ -7,5 +7,6 @@
   <Folder Name="/tests/">
     <Project Path="tests/RecursiveAI.OneModelContext.Tests/RecursiveAI.OneModelContext.Tests.csproj" />
     <Project Path="tests/RecursiveAI.OneModelContext.AotSmoke/RecursiveAI.OneModelContext.AotSmoke.csproj" />
+    <Project Path="tests/RecursiveAI.OneModelContext.TestServer/RecursiveAI.OneModelContext.TestServer.csproj" />
   </Folder>
 </Solution>
