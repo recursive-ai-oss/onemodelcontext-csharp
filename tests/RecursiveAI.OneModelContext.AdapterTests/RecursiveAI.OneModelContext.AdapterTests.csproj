@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>RecursiveAI.OneModelContext.AdapterTests</RootNamespace>
+    <!-- These tests answer Sampling on purpose. -->
+    <NoWarn>$(NoWarn);OMC0002</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <!-- The generic host implementation, to run the hosted services the way an app does. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.AI" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext.Hosting/RecursiveAI.OneModelContext.Hosting.csproj" />
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext.Extensions.AI/RecursiveAI.OneModelContext.Extensions.AI.csproj" />
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext.Generator/RecursiveAI.OneModelContext.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>
