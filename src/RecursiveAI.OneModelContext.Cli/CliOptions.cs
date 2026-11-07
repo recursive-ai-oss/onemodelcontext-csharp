@@ -44,6 +44,21 @@ internal sealed class CliOptions
   /// <summary>A bearer token to send to an http(s) server, or <c>@file</c> holding it.</summary>
   public string? Bearer { get; private set; }
 
+  /// <summary>The OAuth client for <c>login</c>: a Client ID Metadata Document URL (https) or a pre-registered client id.</summary>
+  public string? ClientId { get; private set; }
+
+  /// <summary>The pre-registered client's secret, or <c>@file</c> holding it.</summary>
+  public string? ClientSecret { get; private set; }
+
+  /// <summary>Print the authorization URL instead of opening a browser.</summary>
+  public bool NoBrowser { get; private set; }
+
+  /// <summary>The token file; null for the per-user default.</summary>
+  public string? TokenStore { get; private set; }
+
+  /// <summary>The loopback port <c>login</c> receives the redirect on; 0 lets the system choose.</summary>
+  public int RedirectPort { get; private set; }
+
   /// <summary>Allows <c>proxy</c> to listen on a non-loopback address.</summary>
   public bool AllowNonLoopback { get; private set; }
 
@@ -212,6 +227,32 @@ internal sealed class CliOptions
           break;
         case "--bearer":
           o.Bearer = Value();
+          break;
+        case "--client-id":
+          o.ClientId = Value();
+          break;
+        case "--client-secret":
+          o.ClientSecret = Value();
+          break;
+        case "--no-browser":
+          o.NoBrowser = true;
+          break;
+        case "--token-store":
+          o.TokenStore = Value();
+          break;
+        case "--redirect-port":
+          if (Value() is { } portText)
+          {
+            if (int.TryParse(portText, NumberStyles.None, CultureInfo.InvariantCulture, out var redirectPort) && redirectPort is >= 0 and <= 65535)
+            {
+              o.RedirectPort = redirectPort;
+            }
+            else
+            {
+              o.Error ??= "--redirect-port is a port number.";
+            }
+          }
+
           break;
         case "--allow-host":
           if (Value() is { } allowedHost)

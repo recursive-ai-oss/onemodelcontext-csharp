@@ -13,6 +13,7 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using RecursiveAI.OneModelContext.Diagnostics;
 using RecursiveAI.OneModelContext.JsonRpc;
+using RecursiveAI.OneModelContext.OAuth;
 using RecursiveAI.OneModelContext.Protocol;
 using RecursiveAI.OneModelContext.Sse;
 
@@ -330,6 +331,13 @@ internal sealed class HttpChannel : IJsonRpcChannel
       await FailAsync(call, "Could not reach the server: " + ex.Message, 0, null, ct).ConfigureAwait(false);
       return Outcome.Done;
     }
+    catch (OAuthException ex)
+    {
+      // A handler that signs requests in (OAuthHttpHandler) could not get a token. Its error says why and never holds a token, so it
+      // reaches the caller as it is rather than as a dropped connection.
+      await FailAsync(call, ex.Message, 0, null, ct, ex).ConfigureAwait(false);
+      return Outcome.Done;
+    }
     catch (OperationCanceledException) when (!ct.IsCancellationRequested)
     {
       await FailAsync(call, "The server did not answer in time.", 0, null, ct).ConfigureAwait(false);
@@ -467,7 +475,7 @@ internal sealed class HttpChannel : IJsonRpcChannel
 
   // Reports a failure for one request. Before anything has worked, a failure that is not a protocol answer ends the connection so that
   // connecting fails with a transport error; afterwards it becomes a JSON-RPC error for that request only.
-  private async ValueTask FailAsync(Call call, string message, int? httpStatus, string? challenge, CancellationToken ct)
+  private async ValueTask FailAsync(Call call, string message, int? httpStatus, string? challenge, CancellationToken ct, Exception? cause = null)
   {
     if (call.Kind != MessageKind.Request)
     {
@@ -476,7 +484,7 @@ internal sealed class HttpChannel : IJsonRpcChannel
 
     if (_mode == TransportMode.Unknown && (httpStatus is null or 0 or 401 or 403 or >= 500 || call.Method == Methods.Initialize))
     {
-      _inbound.Writer.TryComplete(httpStatus is 401 or 403 ? new HttpAuthFailure(message, httpStatus.Value, challenge) : new IOException(message));
+      _inbound.Writer.TryComplete(httpStatus is 401 or 403 ? new HttpAuthFailure(message, httpStatus.Value, challenge) : new IOException(message, cause));
       return;
     }
 
@@ -820,7 +828,7 @@ internal sealed class HttpChannel : IJsonRpcChannel
     {
       response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
     }
-    catch (HttpRequestException)
+    catch (Exception ex) when (ex is HttpRequestException or OAuthException)
     {
       return null;
     }
@@ -862,7 +870,7 @@ internal sealed class HttpChannel : IJsonRpcChannel
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
         response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, linked.Token).ConfigureAwait(false);
       }
-      catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException && !ct.IsCancellationRequested)
+      catch (Exception ex) when (ex is HttpRequestException or OAuthException or OperationCanceledException && !ct.IsCancellationRequested)
       {
         return false;
       }
@@ -1070,7 +1078,7 @@ internal sealed class HttpChannel : IJsonRpcChannel
       request.Headers.Remove("Accept");
       using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
     }
-    catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or ObjectDisposedException)
+    catch (Exception ex) when (ex is HttpRequestException or OAuthException or OperationCanceledException or ObjectDisposedException)
     {
       // Best effort: the server drops idle sessions anyway.
     }

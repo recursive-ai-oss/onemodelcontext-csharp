@@ -69,3 +69,12 @@ the metadata document. Waiting is bounded by `Timeout` (5 minutes).
 `AuthorizationException` (root namespace) is what `ContextClient` throws for a `401` or `403`, at connect or mid-session, with the status and
 the parsed `Challenges`. `OAuthException` reports a failed flow (state, `iss`, metadata, registration, token endpoint, timeout) with the
 server's error code; its text never holds a secret.
+
+## From the command line
+
+`onemodelcontext login <url>` signs in to an http(s) server and `onemodelcontext logout <url>` forgets the tokens.
+
+- **Registration:** `--client-id https://…` names a Client ID Metadata Document; any other `--client-id` is a pre-registered client, with `--client-secret S` or `@file`. Without `--client-id` the client tries the server's dynamic registration.
+- **Browser:** the authorization address is printed to standard error and opened with the system opener (`xdg-open`, `open`, `explorer.exe`); `--no-browser` only prints it. The redirect returns to a loopback receiver, on a free port unless `--redirect-port` fixes it (a pre-registered client needs a registered redirect URI, so fix the port for it).
+- **Tokens:** kept in the per-user `onemodelcontext/tokens.json` (`--token-store FILE` to choose), a `FileTokenStore`: mode 0600 on Unix, in a 0700 directory. Running `login` again replaces them, which is how a session gains more scope.
+- **Other commands** (`inspect`, `call`, `read`, `prompt`, `proxy` with an http(s) upstream) send the stored access token and refresh it when it expires. They never open a browser. When the server still refuses (HTTP 401, or a 403 that asks for more scope), the command exits with code 4 and prints the status, the challenge's error and scope, and a hint to run `login`. `--bearer` overrides stored tokens. Tokens are never printed.

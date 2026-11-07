@@ -132,7 +132,8 @@ public sealed class CliTests
   [InlineData("inspect", "x", "--era", "ancient")]
   [InlineData("inspect", "x", "--nope")]
   [InlineData("call", "x", "t", "--arg", "novalue")]
-  [InlineData("login", "http://x")]
+  [InlineData("login")]
+  [InlineData("logout", "some-command --flag")]
   public async Task UsageErrorsExitTwo(params string[] args)
   {
     var (code, _, err) = await RunAsync("", args);

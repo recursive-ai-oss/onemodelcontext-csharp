@@ -6,6 +6,7 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
 
 ### Added
 
+- CLI `login` and `logout` for http(s) servers (browser and loopback redirect, tokens in an owner-only file); the other commands use and refresh the stored tokens, and an authorization failure ends with exit code 4 and the challenge summarised, never the token.
 - `RecursiveAI.OneModelContext.EntityFrameworkCore`: `EfAuthorizationStore<TContext>` and `EfTokenStore<TContext>` over your own `DbContext`
   (`modelBuilder.ApplyContextStores()`), for authorization servers and clients that run as several instances. Single-use codes, refresh
   rotation and assertion replay checks are conditional updates, so they hold when instances race. See `docs/stores.md`.
