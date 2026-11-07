@@ -24,15 +24,30 @@ internal sealed class ModernClientCodec : IClientCodec
       return null;
     }
 
-    var parameters = ModernEnvelope.WrapParams(default, wanted, hello.ClientInfo, hello.Capabilities);
     JsonElement raw;
-    try
+    var retried = false;
+    while (true)
     {
-      raw = await connection.SendRequestAsync(Methods.ServerDiscover, parameters, cancellationToken).ConfigureAwait(false);
-    }
-    catch (JsonRpcRemoteException remote)
-    {
-      return HandleProbeError(remote.Error, hello, wanted);
+      var parameters = ModernEnvelope.WrapParams(default, wanted, hello.ClientInfo, hello.Capabilities);
+      try
+      {
+        raw = await connection.SendRequestAsync(Methods.ServerDiscover, parameters, cancellationToken).ConfigureAwait(false);
+        break;
+      }
+      catch (JsonRpcRemoteException remote)
+      {
+        // basic/versioning, "Protocol Version Negotiation": on -32022 the client SHOULD pick a version from the server's list that it also
+        // speaks and ask again, once; a second refusal is final.
+        if (!retried && remote.Code == ProtocolErrorCodes.UnsupportedProtocolVersion
+          && FirstCommonModern(hello.SupportedVersions, ProtocolVersionException.FromData(remote.Error).Remote) is { } agreed)
+        {
+          retried = true;
+          wanted = agreed;
+          continue;
+        }
+
+        return HandleProbeError(remote.Error, hello, wanted);
+      }
     }
 
     DiscoverResult discover;

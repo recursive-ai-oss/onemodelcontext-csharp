@@ -85,7 +85,7 @@ case "$cmd" in
         # The revision column picks the scenario's variant for that revision (--spec-version).
         SPEC_VERSION="${revision:-}" "$HERE/run.sh" server --url "${url:?--url is needed for server scenarios}" --out "$out" --scenario "$scenario" || failed=$((failed + 1))
       else
-        "$HERE/run.sh" client --command "${command:?--command is needed for client scenarios}" --out "$out" --scenario "$scenario" || failed=$((failed + 1))
+        SPEC_VERSION="${revision:-}" "$HERE/run.sh" client --command "${command:?--command is needed for client scenarios}" --out "$out" --scenario "$scenario" || failed=$((failed + 1))
       fi
     done < "$HERE/scenarios.txt"
     echo "regression: $ran scenario(s) run, $failed failed"

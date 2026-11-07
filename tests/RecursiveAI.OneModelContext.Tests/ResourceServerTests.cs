@@ -52,7 +52,14 @@ public sealed class ResourceServerTests : IDisposable
     server.Resources.Add(new ResourceDefinition("file:///secret", "secret") { RequiredScopes = ["files:write"] }, (_, _) => throw new InvalidOperationException("not reached"));
     server.Prompts.Add(new PromptDefinition("review") { RequiredScopes = ["files:write"] }, (_, _) => throw new InvalidOperationException("not reached"));
     _endpoint = new StreamableHttpEndpoint(server, new StreamableHttpOptions { ResourceServer = _resourceServer });
-    _subscription = ContextDiagnostics.Subscribe(_events.Add);
+    // Diagnostics are process-wide, so other tests' events arrive concurrently with the assertions that read this list.
+    _subscription = ContextDiagnostics.Subscribe(e =>
+    {
+      lock (_events)
+      {
+        _events.Add(e);
+      }
+    });
   }
 
   public void Dispose()

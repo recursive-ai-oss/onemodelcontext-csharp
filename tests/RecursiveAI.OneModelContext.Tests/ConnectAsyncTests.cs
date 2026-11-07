@@ -69,10 +69,15 @@ public class ConnectAsyncTests
   }
 
   [Fact]
-  public async Task A_URL_says_HTTP_arrives_with_the_HTTP_client()
+  public async Task A_URL_connects_over_HTTP_and_a_dead_port_is_a_transport_error()
   {
-    var error = await Assert.ThrowsAsync<NotSupportedException>(() => ModelContext.ConnectAsync("https://example.test/mcp", cancellationToken: TestContext.Current.CancellationToken));
-    Assert.Contains("HTTP client", error.Message, StringComparison.Ordinal);
+    // Bind and release a loopback port so nothing listens on it.
+    var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+    probe.Start();
+    var port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
+    probe.Stop();
+
+    await Assert.ThrowsAsync<TransportException>(() => ModelContext.ConnectAsync("http://127.0.0.1:" + port + "/mcp", cancellationToken: TestContext.Current.CancellationToken));
   }
 
   [Fact]

@@ -18,6 +18,7 @@
     <Project Path="tests/RecursiveAI.OneModelContext.LegacyStdio/RecursiveAI.OneModelContext.LegacyStdio.csproj" />
   </Folder>
   <Folder Name="/conformance/">
+    <Project Path="conformance/Client/RecursiveAI.OneModelContext.ConformanceClient.csproj" />
     <Project Path="conformance/Server/RecursiveAI.OneModelContext.ConformanceServer.csproj" />
   </Folder>
   <Folder Name="/fuzz/">

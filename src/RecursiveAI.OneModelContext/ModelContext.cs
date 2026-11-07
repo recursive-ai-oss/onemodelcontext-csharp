@@ -27,7 +27,7 @@ namespace RecursiveAI.OneModelContext;
 /// await ModelContext.ServeAsync(new Greeter());
 /// </code>
 /// </example>
-public static class ModelContext
+public static partial class ModelContext
 {
   /// <summary>Serves a generated tool class over standard input and output until the client disconnects.</summary>
   /// <param name="tools">An instance of a partial class with <see cref="ToolAttribute"/>, <see cref="ResourceAttribute"/> or <see cref="PromptAttribute"/> methods.</param>
@@ -65,6 +65,12 @@ public static class ModelContext
     ArgumentNullException.ThrowIfNull(server);
     return server.RunAsync(ContextTransport.Stdio(), cancellationToken);
   }
+
+  // A URL is an HTTP server, anything else a command line to start.
+  private static ContextTransport TransportFor(string text) =>
+    text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || text.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+      ? ContextTransport.Http(new Uri(text, UriKind.Absolute))
+      : ContextTransport.ProcessFromCommandLine(text);
 
   /// <summary>
   /// Serves a generated tool class over Streamable HTTP on the loopback address until cancelled. Both protocol eras are answered on
@@ -181,7 +187,7 @@ public static class ModelContext
   /// <summary>Connects to a server named by a command line and negotiates the protocol era (or uses the one you pin).</summary>
   /// <param name="commandOrUrl">
   /// A command line such as <c>npx -y some-server --flag "a b"</c>, started as a child process that speaks over standard input and output
-  /// (see <see cref="ContextTransport.ProcessFromCommandLine"/>: no shell runs). An <c>http://</c> or <c>https://</c> URL is not supported yet.
+  /// (see <see cref="ContextTransport.ProcessFromCommandLine"/>: no shell runs). An <c>http://</c> or <c>https://</c> URL connects over Streamable HTTP (see <see cref="ContextTransport.Http"/>), with the legacy HTTP+SSE fallback; to add a bearer token or tune limits, build the transport yourself.
   /// </param>
   /// <param name="era">Pin the era when a server is known to need it; <see cref="EraPreference.Auto"/> negotiates and remembers the answer per server.</param>
   /// <param name="onConfirm">Answers the server's yes/no questions (a tool asking before it acts): receives the question, returns true for yes. Setting it tells the server this client can be asked. See <see cref="ContextClientOptions.OnConfirm"/>.</param>
@@ -189,7 +195,6 @@ public static class ModelContext
   /// <param name="cancellationToken">Cancels the connection attempt and ends the child process.</param>
   /// <returns>The connected client; dispose it to disconnect and stop the child process.</returns>
   /// <exception cref="ArgumentException"><paramref name="commandOrUrl"/> is empty or has an unclosed quote.</exception>
-  /// <exception cref="NotSupportedException"><paramref name="commandOrUrl"/> is an HTTP URL: Streamable HTTP arrives with the HTTP client.</exception>
   /// <exception cref="ProtocolVersionException">The server and client share no protocol revision.</exception>
   public static Task<ContextClient> ConnectAsync(
     string commandOrUrl,
@@ -200,12 +205,7 @@ public static class ModelContext
   {
     ArgumentException.ThrowIfNullOrWhiteSpace(commandOrUrl);
     var text = commandOrUrl.Trim();
-    if (text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || text.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-    {
-      throw new NotSupportedException("Connecting to a URL needs the Streamable HTTP client, which arrives with the HTTP client; only a command line (stdio) is supported now.");
-    }
-
-    return ConnectAsync(ContextTransport.ProcessFromCommandLine(text), era, onConfirm, onElicit, cancellationToken);
+    return ConnectAsync(TransportFor(text), era, onConfirm, onElicit, cancellationToken);
   }
 
   /// <summary>Like the other <c>ConnectAsync</c> overload for a transport, and also answers requests for a model completion. Deprecated by 2026-07-28. To answer both sampling and roots, set both on <see cref="ContextClientOptions"/>.</summary>
@@ -250,12 +250,7 @@ public static class ModelContext
     ArgumentException.ThrowIfNullOrWhiteSpace(commandOrUrl);
     ArgumentNullException.ThrowIfNull(onSample);
     var text = commandOrUrl.Trim();
-    if (text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || text.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-    {
-      throw new NotSupportedException("Connecting to a URL needs the Streamable HTTP client, which arrives with the HTTP client; only a command line (stdio) is supported now.");
-    }
-
-    return await ContextClient.ConnectAsync(ContextTransport.ProcessFromCommandLine(text), new ContextClientOptions { Era = era, OnConfirm = onConfirm, OnElicit = onElicit, OnSample = onSample }, cancellationToken).ConfigureAwait(false);
+    return await ContextClient.ConnectAsync(TransportFor(text), new ContextClientOptions { Era = era, OnConfirm = onConfirm, OnElicit = onElicit, OnSample = onSample }, cancellationToken).ConfigureAwait(false);
   }
 
   /// <summary>Like the other <c>ConnectAsync</c> overload for a transport, and also answers the request for the client's roots. Deprecated by 2026-07-28. To answer both sampling and roots, set both on <see cref="ContextClientOptions"/>.</summary>
@@ -300,12 +295,7 @@ public static class ModelContext
     ArgumentException.ThrowIfNullOrWhiteSpace(commandOrUrl);
     ArgumentNullException.ThrowIfNull(onListRoots);
     var text = commandOrUrl.Trim();
-    if (text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || text.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-    {
-      throw new NotSupportedException("Connecting to a URL needs the Streamable HTTP client, which arrives with the HTTP client; only a command line (stdio) is supported now.");
-    }
-
-    return await ContextClient.ConnectAsync(ContextTransport.ProcessFromCommandLine(text), new ContextClientOptions { Era = era, OnConfirm = onConfirm, OnElicit = onElicit, OnListRoots = onListRoots }, cancellationToken).ConfigureAwait(false);
+    return await ContextClient.ConnectAsync(TransportFor(text), new ContextClientOptions { Era = era, OnConfirm = onConfirm, OnElicit = onElicit, OnListRoots = onListRoots }, cancellationToken).ConfigureAwait(false);
   }
 
   private static (string Name, string Version) EntryAssemblyIdentity()
