@@ -41,6 +41,9 @@ public sealed class ContextServerOptions
   /// <summary>Limits applied to every incoming message.</summary>
   public JsonRpcReaderOptions ReaderOptions { get; init; } = new();
 
+  /// <summary>Most resources one legacy session may subscribe to with <c>resources/subscribe</c>; more get invalid params. Default 1000.</summary>
+  public int MaxSubscriptionsPerSession { get; init; } = 1000;
+
   /// <summary>
   /// Called once per request after it ends, with who asked, what, and how it ended (never arguments, results or tokens). It runs inline, so it
   /// should be quick; an exception it throws is reported as a diagnostic and otherwise ignored.
@@ -65,7 +68,7 @@ public sealed class ContextServerOptions
 /// await server.RunAsync(ContextTransport.Stdio());
 /// </code>
 /// </example>
-public sealed class ContextServer : IServerHost
+public sealed partial class ContextServer : IServerHost
 {
   private readonly IReadOnlyList<IServerCodec> _codecs;
   private readonly ServerFeatures _features;
@@ -80,6 +83,7 @@ public sealed class ContextServer : IServerHost
     Options = options ?? new ContextServerOptions();
     _codecs = Options.Codecs ?? DefaultCodecs.Server();
     _features = new ServerFeatures(this);
+    HookListChanged();
   }
 
   /// <summary>Creates a server.</summary>

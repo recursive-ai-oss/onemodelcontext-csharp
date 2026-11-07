@@ -30,7 +30,7 @@ public sealed record ElicitResult<T>(string Action, T? Content)
 /// asks is run again from the start when the client retries with the answer; the ask then returns it. Code before an ask must be safe to
 /// repeat, and anything that must not be recomputed goes in <see cref="State"/>, which travels in the signed <c>requestState</c>.
 /// </remarks>
-public sealed class RequestContext
+public sealed partial class RequestContext
 {
   private readonly IServerSink _sink;
   private readonly IInputChannel _input;
