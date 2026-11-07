@@ -154,16 +154,33 @@ public class ClientCallbackTests
     var serving = server.RunAsync(ContextTransport.Stream(a), TestContext.Current.CancellationToken);
     await using (var client = await ModelContext.ConnectAsync(
       ContextTransport.Stream(b),
-      era,
+      onSample: (_, _) => ValueTask.FromResult(new CreateMessageResult { Role = "assistant", Model = "m", Content = [TextContent.Of("sampled")] }),
+      era: era,
       onConfirm: (_, _) => ValueTask.FromResult(true),
       onElicit: (_, _) => ValueTask.FromResult(ElicitResult.Accept(new Dictionary<string, JsonElement> { ["name"] = Json.Parse("\"Ada\"") })),
-      onSample: (_, _) => ValueTask.FromResult(new CreateMessageResult { Role = "assistant", Model = "m", Content = [TextContent.Of("sampled")] }),
-      onListRoots: _ => ValueTask.FromResult(new ListRootsResult { Roots = [new Root { Uri = "file:///r" }] }),
       cancellationToken: TestContext.Current.CancellationToken))
     {
       Assert.Equal("yes", (await client.CallToolAsync("confirm", cancellationToken: TestContext.Current.CancellationToken)).Text);
       Assert.Equal("accept:Ada", (await client.CallToolAsync("form", cancellationToken: TestContext.Current.CancellationToken)).Text);
       Assert.Equal("sampled", (await client.CallToolAsync("sample", cancellationToken: TestContext.Current.CancellationToken)).Text);
+    }
+
+    await serving.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+  }
+
+  [Theory]
+  [MemberData(nameof(Eras))]
+  public async Task The_roots_connect_overload_answers_the_roots_request(EraPreference era)
+  {
+    var server = ServerWithAsks();
+    var (a, b) = PipeEnd.CreatePair();
+    var serving = server.RunAsync(ContextTransport.Stream(a), TestContext.Current.CancellationToken);
+    await using (var client = await ModelContext.ConnectAsync(
+      ContextTransport.Stream(b),
+      onListRoots: _ => ValueTask.FromResult(new ListRootsResult { Roots = [new Root { Uri = "file:///r" }] }),
+      era: era,
+      cancellationToken: TestContext.Current.CancellationToken))
+    {
       Assert.Equal("file:///r", (await client.CallToolAsync("roots", cancellationToken: TestContext.Current.CancellationToken)).Text);
     }
 

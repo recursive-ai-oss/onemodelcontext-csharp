@@ -6,6 +6,8 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <RootNamespace>RecursiveAI.OneModelContext.Tests</RootNamespace>
+    <!-- These tests exercise Sampling, Roots and Logging on purpose. -->
+    <NoWarn>$(NoWarn);OMC0001;OMC0002;OMC0003</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

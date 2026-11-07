@@ -5,6 +5,7 @@ Small programs that show how OneModelContext is used. Each one runs on both prot
 | Sample | Shows | AOT |
 |---|---|---|
 | [`IndexedSearch`](IndexedSearch) | A search tool over an in-memory index, served over stdio in one line. `[Tool]` on a partial class; the generator writes the schema and the invoker. | yes |
+| [`AspNetCoreServer`](AspNetCoreServer) | Generated tools served over Streamable HTTP on ASP.NET Core with `app.MapModelContext("/mcp", server)`. Host middleware (authentication, rate limiting) runs before the protocol handler. | yes |
 | [`LiveControl`](LiveControl) | A running application exposing operations that are only known at runtime: dynamic tools on a `ContextServer`, served over a Unix socket (`ContextTransport.Stream`) and through `ContextServer.OpenSession`, the message-level entry an in-page channel uses. Operations come and go while agents are connected. | yes |
 | [`ToolBridge`](ToolBridge) | Tools defined by another framework (name, description, JSON schema, async delegate) served as tools, including one that asks the user first with `RequestContext.ConfirmAsync`, answered on the client by one `OnConfirm` callback. | yes |
 | [`Explorer`](Explorer) | A client for any stdio server: connect (the era is negotiated), list tools, call one, read a resource, get a prompt, answer the server's questions from typed host callbacks (`OnConfirm`, `OnElicit`). Connects with `ModelContext.ConnectAsync("<command>", onConfirm: ...)`. | yes |
@@ -16,6 +17,7 @@ Small programs that show how OneModelContext is used. Each one runs on both prot
 ```sh
 dotnet run --project samples/IndexedSearch                    # waits for a client on stdin
 dotnet run --project samples/LiveControl                      # connects to itself and prints what happens
+dotnet run --project samples/AspNetCoreServer                 # Streamable HTTP on http://localhost:5000/mcp
 dotnet run --project samples/ToolBridge                       # the confirmation flow on each era
 dotnet run --project samples/Explorer -- --call search --args '{"query":"coffee"}' -- dotnet run --project samples/IndexedSearch
 ```
