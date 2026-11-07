@@ -134,14 +134,17 @@ public sealed class HttpServer : IAsyncDisposable
   internal static bool ShouldWarnProxyOnWideBind(HttpServerOptions options) =>
     options.TrustedProxies.Count > 0 && (options.Address.Equals(IPAddress.Any) || options.Address.Equals(IPAddress.IPv6Any));
 
-  /// <summary>Where <see cref="Warn"/> writes when nobody subscribed to diagnostics; tests replace it.</summary>
+  /// <summary>Where <c>Warn</c> writes when nobody subscribed to diagnostics; tests replace it.</summary>
   internal static Func<TextWriter> WarningWriter { get; set; } = static () => Console.Error;
 
   // A warning nobody sees protects nobody: with no diagnostics subscriber it goes to standard error, once per server start.
   // (Standard error never carries protocol traffic, even for a stdio server.)
-  internal static void Warn(string message)
+  internal static void Warn(string message) => Warn(message, ContextDiagnostics.HasSubscribers, WarningWriter);
+
+  // The subscriber check and the writer are parameters so tests can decide them without touching process-wide state.
+  internal static void Warn(string message, bool hasSubscribers, Func<TextWriter> writer)
   {
-    if (ContextDiagnostics.HasSubscribers)
+    if (hasSubscribers)
     {
       ContextDiagnostics.Publish(DiagnosticKind.Warning, message);
       return;
@@ -149,7 +152,7 @@ public sealed class HttpServer : IAsyncDisposable
 
     try
     {
-      WarningWriter().WriteLine("warning: " + message);
+      writer().WriteLine("warning: " + message);
     }
     catch (Exception ex) when (ex is IOException or ObjectDisposedException)
     {

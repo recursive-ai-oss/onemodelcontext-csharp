@@ -242,20 +242,11 @@ public class ListenerHardeningTests
   [Fact]
   public void The_wide_bind_warning_goes_to_standard_error_when_nobody_listens()
   {
-    var original = HttpServer.WarningWriter;
     var writer = new StringWriter();
-    HttpServer.WarningWriter = () => writer;
-    try
-    {
-      // Warn is private; starting a server on a loopback address never warns, so drive the same path through the options helpers.
-      Assert.True(HttpServer.ShouldWarn(new HttpServerOptions { Address = IPAddress.Any }));
-      Assert.False(HttpServer.ShouldWarn(new HttpServerOptions()));
-      HttpServer.Warn("Anyone can reach it.");
-    }
-    finally
-    {
-      HttpServer.WarningWriter = original;
-    }
+
+    Assert.True(HttpServer.ShouldWarn(new HttpServerOptions { Address = IPAddress.Any }));
+    Assert.False(HttpServer.ShouldWarn(new HttpServerOptions()));
+    HttpServer.Warn("Anyone can reach it.", hasSubscribers: false, () => writer);
 
     Assert.Contains("warning: Anyone can reach it.", writer.ToString(), StringComparison.Ordinal);
   }
@@ -263,20 +254,11 @@ public class ListenerHardeningTests
   [Fact]
   public void The_warning_goes_to_diagnostics_instead_when_someone_subscribed()
   {
-    var original = HttpServer.WarningWriter;
     var writer = new StringWriter();
-    HttpServer.WarningWriter = () => writer;
     var seen = new System.Collections.Concurrent.ConcurrentQueue<DiagnosticEvent>();
-    try
+    using (ContextDiagnostics.Subscribe(seen.Enqueue))
     {
-      using (ContextDiagnostics.Subscribe(seen.Enqueue))
-      {
-        HttpServer.Warn("Heard.");
-      }
-    }
-    finally
-    {
-      HttpServer.WarningWriter = original;
+      HttpServer.Warn("Heard.", hasSubscribers: true, () => writer);
     }
 
     Assert.Equal(string.Empty, writer.ToString());
