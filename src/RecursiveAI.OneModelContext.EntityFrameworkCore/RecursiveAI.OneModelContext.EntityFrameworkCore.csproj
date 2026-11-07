@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>$(PackagePrefix).OneModelContext.EntityFrameworkCore</AssemblyName>
+    <RootNamespace>RecursiveAI.OneModelContext.EntityFrameworkCore</RootNamespace>
+    <PackageId>$(PackagePrefix).OneModelContext.EntityFrameworkCore</PackageId>
+    <IsPackable>true</IsPackable>
+    <Description>Entity Framework Core stores for OneModelContext: a .NET SDK for the Model Context Protocol®. Durable, multi-instance IAuthorizationStore, ITokenStore and ITaskStore as entity configurations on your own DbContext. Pre-release; unpublished. Unaffiliated with 1MCP, the Go OneMCP aggregator and the Model Context Protocol project.</Description>
+    <PackageTags>$(PackageTags);entity-framework-core;oauth;authorization-server</PackageTags>
+  </PropertyGroup>
+
+  <!-- Not marked trimmable or AOT compatible: Entity Framework Core builds its model by reflection at run time and is not trim-safe,
+       so the adapter says nothing it cannot keep. The core package and the other adapters are unaffected. -->
+
+  <!-- The adapter's only dependencies are the core package and Entity Framework Core (the base package and its relational half, which
+       carries ToTable and the set-based ExecuteUpdate that makes single-use redemption one atomic statement). -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <ProjectReference Include="../RecursiveAI.OneModelContext/RecursiveAI.OneModelContext.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="RecursiveAI.OneModelContext.EntityFrameworkCore.Tests" />
+  </ItemGroup>
+
+</Project>
