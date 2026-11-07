@@ -6,7 +6,7 @@ These apps measure OneModelContext's speed rows on one machine, black-box, again
 bench/run.sh --rows all --out <dir>          # or --rows r1,r3 ...; --seconds N sets the timed phase (default 4), --seq N the sequential calls (default 2000)
 ```
 
-`run.sh` publishes the apps, runs the driver, and writes `results.md` and `results.json` in `<dir>`: for every row our median, the reference's median, the ratio (our cost over the reference's, so below 1.0 means cheaper), allocations per call, peak memory, the geomean of the gated ratios, the worst ratio, and the machine (CPU, ISA flags, cores, load before, during and after, runtime and reference versions). Results are machine-specific and are not committed. Numbers taken on a loaded or shared host are indicative only; publishable rows are run alone on an otherwise idle machine.
+`run.sh` publishes the apps, runs the driver, and writes `results.md` and `results.json` in `<dir>`: for every row our median, the reference's median, the ratio (our cost over the reference's, so below 1.0 means cheaper), allocations and CPU time per call, peak memory, the geomean of the gated ratios, the worst ratio, and the machine (CPU, ISA flags, cores, load before, during and after, runtime and reference versions). Results are machine-specific and are not committed. Numbers taken on a loaded or shared host are indicative only; publishable rows are run alone on an otherwise idle machine.
 
 ## Pins
 
@@ -25,7 +25,7 @@ The reference is used only through its published API. It is a speed reference, n
 
 ## Equivalent work
 
-Same tools on both servers: `echo` (a short string in, a short string out), `text1mb` (1 MiB of text), `image1mb` (1 MiB of bytes, base64-encoded on every call, returned as an inline `image/png`), `bench_stats` (process allocation and peak memory), and with `--filler 1000` a thousand small tools. Same build configuration (Release, workstation non-concurrent GC, tiered PGO, invariant globalization), logging providers cleared, loopback only, one fresh server process per measurement.
+Same tools on both servers: `echo` (a short string in, a short string out), `text1mb` (1 MiB of text), `image1mb` (1 MiB of bytes, base64-encoded on every call, returned as an inline `image/png`), `bench_stats` (process allocation, peak memory and CPU time), and with `--filler 1000` a thousand small tools. Same build configuration (Release, workstation non-concurrent GC, tiered PGO, invariant globalization), logging providers cleared, loopback only, one fresh server process per measurement.
 
 What cannot be made equal, and how it is handled:
 
