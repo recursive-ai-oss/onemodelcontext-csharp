@@ -32,6 +32,9 @@ public sealed class TokenRecord
   /// <summary>When the access token expires, if the server said.</summary>
   public DateTimeOffset? ExpiresAt { get; init; }
 
+  /// <summary>The resource indicator (RFC 8707) the tokens were requested for, as the resource published it.</summary>
+  public string? Resource { get; init; }
+
   /// <summary>The scope set last requested for this authorization, space-separated. Step-up unions new challenges into it.</summary>
   public string? Scope { get; init; }
 
@@ -55,6 +58,7 @@ public sealed class TokenRecord
       writer.WriteString("expires_at", at.ToString("O", CultureInfo.InvariantCulture));
     }
 
+    WriteIf(writer, "resource", Resource);
     WriteIf(writer, "scope", Scope);
     if (Dynamic)
     {
@@ -81,6 +85,7 @@ public sealed class TokenRecord
       AccessToken = MetadataJson.GetString(element, "access_token"),
       RefreshToken = MetadataJson.GetString(element, "refresh_token"),
       ExpiresAt = expires,
+      Resource = MetadataJson.GetString(element, "resource"),
       Scope = MetadataJson.GetString(element, "scope"),
       Dynamic = MetadataJson.GetBool(element, "dynamic"),
     };

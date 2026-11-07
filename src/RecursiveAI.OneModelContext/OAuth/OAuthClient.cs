@@ -35,6 +35,7 @@ public sealed class OAuthClient : IDisposable
   private readonly bool _ownsHttp;
   private readonly SemaphoreSlim _gate = new(1, 1);
   private readonly string _tokenKey;
+  private string _indicator;
   private TokenRecord? _record;
   private bool _loaded;
 
@@ -57,6 +58,7 @@ public sealed class OAuthClient : IDisposable
     }
 
     _tokenKey = "token:" + options.Canonical;
+    _indicator = options.Canonical;
   }
 
   /// <summary>The configuration.</summary>
@@ -251,11 +253,16 @@ public sealed class OAuthClient : IDisposable
       }
 
       // RFC 9728 section 3.3: the resource in the document must be the resource that was asked about. Without this check a malicious
-      // server could point a client at an authorization server on behalf of a different resource.
-      if (OAuthUri.CanonicalResource(metadata.Resource) != _options.Canonical)
+      // server could point a client at an authorization server on behalf of a different resource. A document served from the root
+      // well-known location names the origin or a parent path of the endpoint, and is accepted as that: the token is then requested for
+      // the resource exactly as the document publishes it.
+      var published = OAuthUri.CanonicalResource(metadata.Resource);
+      if (published is null || !IsSameOrAncestor(published, _options.Canonical))
       {
         throw new OAuthException("The protected resource metadata names a different resource than the one requested, so it was not used.", "resource_mismatch");
       }
+
+      _indicator = published;
 
       if (metadata.AuthorizationServers.Count == 0)
       {
@@ -268,6 +275,10 @@ public sealed class OAuthClient : IDisposable
     // 2025-03-26 authorization: a server with no protected resource metadata is its own authorization server.
     return new ResourceDiscovery(null, origin);
   }
+
+  private static bool IsSameOrAncestor(string published, string requested) =>
+    string.Equals(published, requested, StringComparison.Ordinal)
+    || (requested.StartsWith(published, StringComparison.Ordinal) && requested[published.Length] == '/' && !published.Contains('?', StringComparison.Ordinal));
 
   private string SelectIssuer(ResourceDiscovery discovery)
   {
@@ -410,7 +421,7 @@ public sealed class OAuthClient : IDisposable
     Append(query, "code_challenge", challenge);
     Append(query, "code_challenge_method", "S256");
     Append(query, "state", state);
-    Append(query, "resource", _options.Canonical);
+    Append(query, "resource", _indicator);
     if (scope is not null)
     {
       Append(query, "scope", scope);
@@ -433,7 +444,7 @@ public sealed class OAuthClient : IDisposable
       new("code", response.Code),
       new("redirect_uri", redirect.AbsoluteUri),
       new("code_verifier", verifier),
-      new("resource", _options.Canonical),
+      new("resource", _indicator),
     };
     var token = await TokenRequestAsync(server, form, client, cancellationToken).ConfigureAwait(false);
     return ToRecord(token, issuer, client, scope, requireBearer: true);
@@ -549,7 +560,7 @@ public sealed class OAuthClient : IDisposable
       throw new OAuthException("The resource uses a different authorization server than the one these client credentials were issued by, so they were not sent.", "issuer_not_expected");
     }
 
-    var form = new List<KeyValuePair<string, string>> { new("grant_type", "client_credentials"), new("resource", _options.Canonical) };
+    var form = new List<KeyValuePair<string, string>> { new("grant_type", "client_credentials"), new("resource", _indicator) };
     var requested = grant.Scope ?? scope;
     if (requested is not null)
     {
@@ -604,7 +615,7 @@ public sealed class OAuthClient : IDisposable
       new("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange"),
       new("requested_token_type", IdJagTokenType),
       new("audience", issuer),
-      new("resource", _options.Canonical),
+      new("resource", _indicator),
       new("subject_token", assertion),
       new("subject_token_type", enterprise.IdentityAssertionType),
       new("client_id", enterprise.IdentityProviderClientId ?? enterprise.ClientId),
@@ -629,7 +640,7 @@ public sealed class OAuthClient : IDisposable
     {
       new("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
       new("assertion", idJag),
-      new("resource", _options.Canonical),
+      new("resource", _indicator),
     };
     if (requested is not null)
     {
@@ -646,6 +657,7 @@ public sealed class OAuthClient : IDisposable
   private async Task<string?> RefreshAsync(TokenRecord record, CancellationToken cancellationToken)
   {
     var issuer = record.Issuer!;
+    _indicator = record.Resource ?? _options.Canonical;
     // An issuer equal to the resource origin is the 2025-03-26 case: the server is its own authorization server.
     var legacy = string.Equals(issuer, _options.Resource.GetLeftPart(UriPartial.Authority), StringComparison.Ordinal);
     var server = await DiscoverServerAsync(issuer, legacy, cancellationToken).ConfigureAwait(false);
@@ -654,7 +666,7 @@ public sealed class OAuthClient : IDisposable
     {
       new("grant_type", "refresh_token"),
       new("refresh_token", record.RefreshToken!),
-      new("resource", _options.Canonical),
+      new("resource", record.Resource ?? _options.Canonical),
     };
     TokenResponse token;
     try
@@ -664,7 +676,7 @@ public sealed class OAuthClient : IDisposable
     catch (OAuthException ex) when (ex.Error is "invalid_grant" or "invalid_client")
     {
       // The refresh token is spent or revoked: forget it so it is not sent again.
-      var cleared = new TokenRecord { Issuer = record.Issuer, ClientId = record.ClientId, Scope = record.Scope };
+      var cleared = new TokenRecord { Issuer = record.Issuer, ClientId = record.ClientId, Resource = record.Resource, Scope = record.Scope };
       _record = cleared;
       await _options.Store.SetAsync(_tokenKey, cleared, cancellationToken).ConfigureAwait(false);
       return null;
@@ -681,6 +693,7 @@ public sealed class OAuthClient : IDisposable
         AccessToken = updated.AccessToken,
         RefreshToken = record.RefreshToken,
         ExpiresAt = updated.ExpiresAt,
+        Resource = updated.Resource,
         Scope = updated.Scope,
       };
     }
@@ -755,7 +768,7 @@ public sealed class OAuthClient : IDisposable
     if (status != 200)
     {
       var error = ErrorOf(body);
-      var text = body.Length == 0 ? null : DescriptionOf(body);
+      var text = body.Length == 0 ? null : RedactBasic(Redact(DescriptionOf(body), form), basicCredentials);
       throw new OAuthException(
         "The token endpoint refused the request (HTTP " + status.ToString(CultureInfo.InvariantCulture) + (error is null ? string.Empty : ", " + error) + (text is null ? string.Empty : ": " + text) + ").",
         error);
@@ -798,8 +811,46 @@ public sealed class OAuthClient : IDisposable
       AccessToken = token.AccessToken,
       RefreshToken = token.RefreshToken,
       ExpiresAt = token.ExpiresIn is { } seconds ? _time.GetUtcNow().AddSeconds(seconds) : null,
+      Resource = _indicator,
       Scope = requestedScope,
     };
+  }
+
+  // A hostile server can echo what it was sent into its error text; nothing secret from the request may come back out in a message.
+  private static string? Redact(string? text, List<KeyValuePair<string, string>> form)
+  {
+    if (text is null)
+    {
+      return null;
+    }
+
+    foreach (var (name, value) in form)
+    {
+      if (value.Length >= 4 && name is "code" or "code_verifier" or "refresh_token" or "client_secret" or "assertion" or "client_assertion" or "subject_token")
+      {
+        text = text.Replace(value, "[redacted]", StringComparison.Ordinal);
+      }
+    }
+
+    return text;
+  }
+
+  private static string? RedactBasic(string? text, string? basicCredentials)
+  {
+    if (text is null || basicCredentials is null)
+    {
+      return text;
+    }
+
+    var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(basicCredentials));
+    var colon = decoded.IndexOf(':', StringComparison.Ordinal);
+    if (colon >= 0 && colon + 1 < decoded.Length)
+    {
+      var secret = Uri.UnescapeDataString(decoded[(colon + 1)..].Replace('+', ' '));
+      text = text.Replace(secret, "[redacted]", StringComparison.Ordinal).Replace(decoded[(colon + 1)..], "[redacted]", StringComparison.Ordinal);
+    }
+
+    return text;
   }
 
   private static string? ErrorOf(byte[] body)
