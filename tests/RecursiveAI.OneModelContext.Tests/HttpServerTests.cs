@@ -12,6 +12,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using RecursiveAI.OneModelContext.Auth;
 using RecursiveAI.OneModelContext.Hosting;
 using RecursiveAI.OneModelContext.Http;
 using RecursiveAI.OneModelContext.Tests.Generated;
@@ -810,6 +811,44 @@ public class HttpServerTests
     Assert.Equal(404, missing.Status);
     Assert.Equal(200, init.Status);
     Assert.Contains("2025-06-18", init.Body, StringComparison.Ordinal);
+  }
+
+  [Fact]
+  public async Task A_resource_server_challenges_with_the_metadata_url_and_serves_the_document_on_the_listener()
+  {
+    const string Token = "listener-test-token-0123456789abcdef";
+    var validator = new StaticTokenValidator().Add(Token, "alice", ["files:read"]);
+    var resourceServer = new ResourceServer(new ResourceServerOptions(new Uri("https://mcp.test/mcp"), validator) { AuthorizationServers = ["https://issuer.test"] });
+    using var cts = new CancellationTokenSource();
+    var url = new TaskCompletionSource<Uri>();
+    var serving = ModelContext.ServeHttpAsync(new SignatureTools(), port: 0, onListening: u => url.SetResult(u), resourceServer: resourceServer, cancellationToken: cts.Token);
+    var address = await url.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+    using var client = await RawClient.ConnectAsync(new IPEndPoint(IPAddress.Loopback, address.Port));
+    var host = $"127.0.0.1:{address.Port}";
+    var ping = """{"jsonrpc":"2.0","id":1,"method":"ping"}""";
+
+    await client.SendAsync(PostJson(ping).Replace("Host: 127.0.0.1", "Host: " + host, StringComparison.Ordinal));
+    var challenge = await client.ReadResponseAsync();
+    await client.SendAsync($"GET /.well-known/oauth-protected-resource/mcp HTTP/1.1\r\nHost: {host}\r\n\r\n");
+    var document = await client.ReadResponseAsync();
+    await client.SendAsync($"GET /.well-known/oauth-protected-resource HTTP/1.1\r\nHost: {host}\r\n\r\n");
+    var root = await client.ReadResponseAsync();
+    await client.SendAsync(PostJson("""{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}""", "Authorization: Bearer " + Token).Replace("Host: 127.0.0.1", "Host: " + host, StringComparison.Ordinal));
+    var authorized = await client.ReadResponseAsync();
+    await client.SendAsync($"GET /.well-known/other HTTP/1.1\r\nHost: {host}\r\n\r\n");
+    var other = await client.ReadResponseAsync();
+    await cts.CancelAsync();
+    await serving.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+    Assert.Equal(401, challenge.Status);
+    Assert.Contains("resource_metadata=\"https://mcp.test/.well-known/oauth-protected-resource/mcp\"", challenge.Headers["WWW-Authenticate"], StringComparison.Ordinal);
+    Assert.Equal(200, document.Status);
+    using var metadata = JsonDocument.Parse(document.Body);
+    Assert.Equal("https://mcp.test/mcp", metadata.RootElement.GetProperty("resource").GetString());
+    Assert.Equal(200, root.Status);
+    Assert.Equal(200, authorized.Status);
+    Assert.Equal(404, other.Status);
+    Assert.DoesNotContain(Token, challenge.Body + document.Body, StringComparison.Ordinal);
   }
 
   private static int Count(string text, string needle)

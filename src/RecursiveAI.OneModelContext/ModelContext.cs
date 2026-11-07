@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using RecursiveAI.OneModelContext.Auth;
 using RecursiveAI.OneModelContext.Hosting;
 using RecursiveAI.OneModelContext.Http;
 using RecursiveAI.OneModelContext.Protocol;
@@ -76,14 +77,15 @@ public static class ModelContext
   /// <param name="name">The server name reported to clients; defaults to the entry assembly's name.</param>
   /// <param name="version">The server version reported to clients; defaults to the entry assembly's version.</param>
   /// <param name="onListening">Called once with the full URL clients connect to, after the port is bound.</param>
+  /// <param name="resourceServer">Requires a valid bearer token on the endpoint and serves the protected resource metadata (RFC 9728) at its well-known paths; null serves without authentication.</param>
   /// <param name="cancellationToken">Stops the server.</param>
   /// <returns>A task that completes, after the server has shut down, when <paramref name="cancellationToken"/> is cancelled.</returns>
   /// <exception cref="ArgumentNullException"><paramref name="tools"/> is null.</exception>
   /// <exception cref="System.Net.Sockets.SocketException">The port cannot be bound.</exception>
-  public static Task ServeHttpAsync(IContextRegistrar tools, int port = 3001, string path = "/mcp", string? name = null, string? version = null, Action<Uri>? onListening = null, CancellationToken cancellationToken = default)
+  public static Task ServeHttpAsync(IContextRegistrar tools, int port = 3001, string path = "/mcp", string? name = null, string? version = null, Action<Uri>? onListening = null, ResourceServer? resourceServer = null, CancellationToken cancellationToken = default)
   {
     ArgumentNullException.ThrowIfNull(tools);
-    return ServeHttpAsync([tools], port, path, name, version, onListening, cancellationToken);
+    return ServeHttpAsync([tools], port, path, name, version, onListening, resourceServer, cancellationToken);
   }
 
   /// <summary>Serves several generated tool classes over Streamable HTTP on the loopback address until cancelled.</summary>
@@ -93,13 +95,14 @@ public static class ModelContext
   /// <param name="name">The server name reported to clients; defaults to the entry assembly's name.</param>
   /// <param name="version">The server version reported to clients; defaults to the entry assembly's version.</param>
   /// <param name="onListening">Called once with the full URL clients connect to, after the port is bound.</param>
+  /// <param name="resourceServer">Requires a valid bearer token on the endpoint and serves the protected resource metadata (RFC 9728) at its well-known paths; null serves without authentication.</param>
   /// <param name="cancellationToken">Stops the server.</param>
   /// <returns>A task that completes, after the server has shut down, when <paramref name="cancellationToken"/> is cancelled.</returns>
   /// <exception cref="ArgumentNullException"><paramref name="tools"/> is null.</exception>
-  public static Task ServeHttpAsync(IEnumerable<IContextRegistrar> tools, int port = 3001, string path = "/mcp", string? name = null, string? version = null, Action<Uri>? onListening = null, CancellationToken cancellationToken = default)
+  public static Task ServeHttpAsync(IEnumerable<IContextRegistrar> tools, int port = 3001, string path = "/mcp", string? name = null, string? version = null, Action<Uri>? onListening = null, ResourceServer? resourceServer = null, CancellationToken cancellationToken = default)
   {
     ArgumentNullException.ThrowIfNull(tools);
-    return ServeHttpAsync(CreateServer(tools, name, version), port, path, onListening, cancellationToken);
+    return ServeHttpAsync(CreateServer(tools, name, version), port, path, onListening, resourceServer, cancellationToken);
   }
 
   /// <summary>Serves a configured server over Streamable HTTP on the loopback address until cancelled.</summary>
@@ -107,11 +110,12 @@ public static class ModelContext
   /// <param name="port">The TCP port on 127.0.0.1; 0 picks a free one. Default 3001.</param>
   /// <param name="path">The URL path of the endpoint, starting with <c>/</c>. Default <c>/mcp</c>.</param>
   /// <param name="onListening">Called once with the full URL clients connect to, after the port is bound.</param>
+  /// <param name="resourceServer">Requires a valid bearer token on the endpoint and serves the protected resource metadata (RFC 9728) at its well-known paths; null serves without authentication.</param>
   /// <param name="cancellationToken">Stops the server.</param>
   /// <returns>A task that completes, after the server has shut down, when <paramref name="cancellationToken"/> is cancelled.</returns>
   /// <exception cref="ArgumentNullException"><paramref name="server"/> is null.</exception>
   /// <exception cref="ArgumentException"><paramref name="path"/> does not start with <c>/</c>.</exception>
-  public static async Task ServeHttpAsync(ContextServer server, int port = 3001, string path = "/mcp", Action<Uri>? onListening = null, CancellationToken cancellationToken = default)
+  public static async Task ServeHttpAsync(ContextServer server, int port = 3001, string path = "/mcp", Action<Uri>? onListening = null, ResourceServer? resourceServer = null, CancellationToken cancellationToken = default)
   {
     ArgumentNullException.ThrowIfNull(server);
     if (string.IsNullOrEmpty(path) || path[0] != '/')
@@ -119,9 +123,10 @@ public static class ModelContext
       throw new ArgumentException("The path starts with '/'.", nameof(path));
     }
 
-    using var endpoint = new StreamableHttpEndpoint(server);
+    using var endpoint = new StreamableHttpEndpoint(server, new StreamableHttpOptions { ResourceServer = resourceServer });
+    // The protected resource metadata is served at its well-known paths, which are not under the endpoint path (RFC 9728 section 3.1).
     await using var http = new HttpServer(
-      exchange => exchange.Request.Path == path ? endpoint.HandleAsync(exchange) : NotFoundAsync(exchange),
+      exchange => exchange.Request.Path == path || (resourceServer?.IsMetadataPath(exchange.Request.Path) ?? false) ? endpoint.HandleAsync(exchange) : NotFoundAsync(exchange),
       new HttpServerOptions { Port = port },
       server.Options.TimeProvider);
     http.Start();
