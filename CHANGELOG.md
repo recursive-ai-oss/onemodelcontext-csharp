@@ -18,6 +18,10 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
 
 ### Added
 
+- `RecursiveAI.OneModelContext.OneLite`: `OneLiteAuthorizationStore`, `OneLiteTokenStore` and `OneLiteTaskStore` (experimental) in one embedded
+  OneLite database file, for a single host with no database server and no Entity Framework. The tables are created and versioned by the
+  package itself (a file written by a newer schema is refused), single-use codes, refresh rotation, assertion replay checks and the task
+  compare-and-swap hold across threads and processes, and the package is trim and NativeAOT safe. See `docs/stores.md`.
 - Listener and endpoint hardening: `MaxConnectionsPerAddress`, `FirstByteTimeout` and TCP keep-alive on the built-in listener; `MaxInFlightBodyBytes` (request bodies are sized to their declared length) and `MaxStreamLifetime` on `StreamableHttpOptions`; POST needs `Content-Type: application/json` (415); `ModelContext.ServeHttpAsync` caps bodies at 1 MiB; the non-loopback warning reaches standard error when nothing subscribes to diagnostics. See `docs/http-limits.md`.
 - Experimental extensions (`OMCX0001` Tasks, `OMCX0002` Skills, `OMCX0003` Server Cards), off until the host opts in. Tasks: tools that answer with a task handle, `tasks/get`, `tasks/update` and `tasks/cancel`, client polling, and `ITaskStore` with in-memory and file stores. Skills over MCP: `SkillDefinition`, `UseSkills`/`AddSkill`, `skills/list`, `skills/get` and `resources/directory/read` on the server; listing, loading and reading with digest, size and frontmatter verification on the client. Server Cards: published at `<endpoint>/server-card` by the HTTP core, the listener and `MapModelContext`, fetched through the guarded fetcher with AI Catalog discovery. See `docs/extensions.md`.
 - CLI `login` and `logout` for http(s) servers (browser and loopback redirect, tokens in an owner-only file); the other commands use and refresh the stored tokens, and an authorization failure ends with exit code 4 and the challenge summarised, never the token.

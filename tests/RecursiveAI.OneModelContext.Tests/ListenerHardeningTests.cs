@@ -354,6 +354,55 @@ public class ListenerHardeningTests
     await Assert.ThrowsAsync<OperationCanceledException>(() => bounded);
   }
 
+  // ---- a body the listener rejects keeps its own status -----------------------------------------------------------------------
+
+  private static HttpServer StartMcpListener(StreamableHttpOptions? endpointOptions = null, HttpServerOptions? options = null)
+  {
+    var endpoint = new StreamableHttpEndpoint(new ContextServer("chunks", "1"), endpointOptions);
+    var server = new HttpServer(e => endpoint.HandleAsync(e), options);
+    server.Start();
+    return server;
+  }
+
+  private const string ChunkedHead = "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nAccept: application/json\r\nTransfer-Encoding: chunked\r\n\r\n";
+
+  [Fact]
+  public async Task A_malformed_chunk_size_is_400_not_408()
+  {
+    await using var server = StartMcpListener();
+    using var client = await RawClient.ConnectAsync(server.LocalEndPoint!);
+
+    await client.SendAsync(ChunkedHead + "-1\r\nx\r\n0\r\n\r\n");
+
+    Assert.Equal(400, (await client.ReadResponseAsync()).Status);
+  }
+
+  [Fact]
+  public async Task A_chunked_body_over_the_limit_is_413_not_408()
+  {
+    await using var server = StartMcpListener(new StreamableHttpOptions { MaxRequestBodyBytes = 16 });
+    using var client = await RawClient.ConnectAsync(server.LocalEndPoint!);
+
+    await client.SendAsync(ChunkedHead + "40\r\n" + new string(' ', 64) + "\r\n0\r\n\r\n");
+
+    Assert.Equal(413, (await client.ReadResponseAsync()).Status);
+  }
+
+  [Fact]
+  public async Task A_stalled_chunked_body_is_still_408()
+  {
+    var clock = new ManualTimeProvider();
+    var server = new ContextServer("chunks", "1", new ContextServerOptions { TimeProvider = clock });
+    using var endpoint = new StreamableHttpEndpoint(server, new StreamableHttpOptions { BodyReadTimeout = TimeSpan.FromSeconds(30) });
+    var exchange = new TestExchange("POST", new StallAfterStream(4), null, ("Content-Type", "application/json"), ("Accept", "application/json")).Run(endpoint);
+    await Task.Delay(200, TestContext.Current.CancellationToken);
+
+    clock.Advance(TimeSpan.FromSeconds(31));
+    await exchange.BodyAsync();
+
+    Assert.Equal(408, exchange.Status);
+  }
+
   // ---- F9 ----------------------------------------------------------------------------------------------------------------------
 
   [Fact]

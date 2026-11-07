@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <NoWarn>$(NoWarn);OMCX0001</NoWarn>
+  </PropertyGroup>
+
+  <!-- CI and the local check pass SmokeMode=aot, as for the core smoke project. -->
+  <PropertyGroup Condition="'$(SmokeMode)' == 'aot'">
+    <PublishAot>true</PublishAot>
+    <RuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext.OneLite/RecursiveAI.OneModelContext.OneLite.csproj" />
+  </ItemGroup>
+
+</Project>
