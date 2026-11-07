@@ -17,6 +17,7 @@
 !/conformance/
 !/interop/
 !/fuzz/
+!/bench/
 !/docs/
 !/README.md
 !/PACKAGE.md
