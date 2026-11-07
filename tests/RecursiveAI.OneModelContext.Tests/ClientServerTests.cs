@@ -402,11 +402,19 @@ public class DiagnosticsTests
   [Fact]
   public void Diagnostic_subscribers_can_unsubscribe()
   {
+    // Other tests publish concurrently, so count only this test's own notes.
+    var marker = Guid.NewGuid().ToString("N");
     var seen = 0;
-    var subscription = ContextDiagnostics.Subscribe(_ => seen++);
-    ContextDiagnostics.Publish(DiagnosticKind.Note, "a");
+    var subscription = ContextDiagnostics.Subscribe(e =>
+    {
+      if (e.Message.StartsWith(marker, StringComparison.Ordinal))
+      {
+        Interlocked.Increment(ref seen);
+      }
+    });
+    ContextDiagnostics.Publish(DiagnosticKind.Note, marker + "a");
     subscription.Dispose();
-    ContextDiagnostics.Publish(DiagnosticKind.Note, "b");
+    ContextDiagnostics.Publish(DiagnosticKind.Note, marker + "b");
 
     Assert.Equal(1, seen);
   }

@@ -60,6 +60,23 @@ variants run with `--scenario ... --spec-version`, or `--spec-version` alone for
 The two `list_changed` checks of `server-stateless` are warnings (the suite calls them SHOULD requirements): the suite mutates the
 server's lists and expects a notification on an open `subscriptions/listen` stream, and this server does not yet send one.
 
+## The authorization server
+
+The suite's `authorization` command tests an authorization server. `conformance/AuthorizationServer` is a small host for
+`AuthorizationServer` that approves every request for one client, because the suite plays the user's browser, and
+`conformance/authorization-server.sh` runs the suite against it, answering the "open this URL in your browser" step itself with curl:
+
+```sh
+export ONEMODELCONTEXT_CONFORMANCE_CACHE=/some/directory/outside/the/repository
+export ONEMODELCONTEXT_AS_PORT=PORT ONEMODELCONTEXT_CALLBACK_PORT=OTHER_PORT
+conformance/authorization-server.sh --out results --spec-version 2026-07-28
+```
+
+The suite has two authorization-server scenarios, `authorization-server-metadata-endpoint` and `authorization-code-grant`. The second
+needs the first to have run in the same process, which is what the command does without `--scenario`. Both pass at every
+`--spec-version` they apply to (2025-03-26: 2 of 2 checks; 2025-06-18: 2 of 2; 2025-11-25 and 2026-07-28: 3 of 3, including the check
+that the metadata advertises `client_id_metadata_document_supported`).
+
 ## The suite's scenario list (`list` output, 0.2.0-alpha.12)
 
 Bracketed revisions are where a scenario applies.

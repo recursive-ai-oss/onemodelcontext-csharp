@@ -76,6 +76,13 @@ if (listed is null || listed.Contains("\"title\"", StringComparison.Ordinal) || 
   return 1;
 }
 
+// The authorization server: flow, file store, key set validation and the address guard.
+if (await AuthorizationServerSmoke.RunAsync() is { } failure)
+{
+  Console.Error.WriteLine(failure);
+  return 1;
+}
+
 // A Streamable HTTP client round trip over a loopback socket: the library's HTTP client against a few lines of HTTP/1.1 that hand each
 // POST body to a server's message-level entry. It covers era negotiation, JSON responses and the refused listening stream.
 using (var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0))

@@ -23,6 +23,7 @@
   <Folder Name="/conformance/">
     <Project Path="conformance/Client/RecursiveAI.OneModelContext.ConformanceClient.csproj" />
     <Project Path="conformance/Server/RecursiveAI.OneModelContext.ConformanceServer.csproj" />
+    <Project Path="conformance/AuthorizationServer/RecursiveAI.OneModelContext.ConformanceAuthorizationServer.csproj" />
   </Folder>
   <Folder Name="/fuzz/">
     <Project Path="fuzz/RecursiveAI.OneModelContext.Fuzz/RecursiveAI.OneModelContext.Fuzz.csproj" />
