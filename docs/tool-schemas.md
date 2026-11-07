@@ -94,10 +94,17 @@ can hold internals and is never sent; it is published to the diagnostics stream 
   listings against that.
 - An exception from the tool is reported as `The tool failed.`, not with its type and message.
 - `HashSet<T>` is listed with `uniqueItems`, but duplicates are not refused when reading (the serializer drops them).
-- Generator diagnostics are `OMCG0001` to `OMCG0011` (the table's `OLT001` to `OLT011` in order, with the same meanings, plus the
+- Generator diagnostics are `OMCG0001` to `OMCG0012` (the table's `OLT001` to `OLT011` in order, with the same meanings, plus the
   resource and prompt rules).
 - `RequestContext` plays the part of the table's `ToolContext`; `EndsLoop`, `RequiresApproval`, `ParallelSafe` and `TimeoutSeconds` do
   not exist here (a request timeout is a server option).
+
+## MCP Apps properties
+
+`[Tool(UiResource = "ui://weather/view", UiVisibility = new[] { "model", "app" })]` names the `ui://` resource that renders the tool's
+result and who may call it (default both). The generated registration opts the server in to the Apps extension and sets the tool's
+`_meta.ui`; callers that did not negotiate Apps see an ordinary tool. Register the resource itself with `AddUiResource`. See
+`extensions.md`.
 
 ## Resources and prompts
 
@@ -122,3 +129,4 @@ user message), `PromptMessage`s or `GetPromptResult`.
 | OMCG0009 | More than one `RequestContext` or `CancellationToken` parameter |
 | OMCG0010 | The containing class is generic |
 | OMCG0011 | The serializer context uses a property naming policy other than `CamelCase` or none |
+| OMCG0012 | `UiResource` is not a `ui://` URI, or `UiVisibility` holds something other than `model` or `app` |

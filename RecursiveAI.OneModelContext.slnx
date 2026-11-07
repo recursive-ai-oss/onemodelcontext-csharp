@@ -39,5 +39,6 @@
     <Project Path="samples/HostedServer/RecursiveAI.OneModelContext.Samples.HostedServer.csproj" />
     <Project Path="samples/ChatTools/RecursiveAI.OneModelContext.Samples.ChatTools.csproj" />
     <Project Path="samples/QuickPath/RecursiveAI.OneModelContext.Samples.QuickPath.csproj" />
+    <Project Path="samples/AppsServer/RecursiveAI.OneModelContext.Samples.AppsServer.csproj" />
   </Folder>
 </Solution>

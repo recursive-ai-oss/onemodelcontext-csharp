@@ -122,6 +122,10 @@ public interface IServerHost
   /// <summary>The clock for timeouts, cache lifetimes and state expiry.</summary>
   TimeProvider TimeProvider { get; }
 
+  /// <summary>The extensions to advertise on a connection that negotiated <paramref name="protocolVersion"/>: those that work on that revision. Default: every extension in <see cref="Capabilities"/>.</summary>
+  /// <param name="protocolVersion">The revision in force.</param>
+  Dictionary<string, JsonElement>? ExtensionsFor(string protocolVersion) => Capabilities.Extensions;
+
   /// <summary>How long clients may reuse list results and discovery (2026-07-28 <c>ttlMs</c>). Default zero.</summary>
   TimeSpan CacheTtl => TimeSpan.Zero;
 

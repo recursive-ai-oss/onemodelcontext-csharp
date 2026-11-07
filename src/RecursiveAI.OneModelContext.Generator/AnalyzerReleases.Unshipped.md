@@ -13,3 +13,4 @@ OMCG0008 | OneModelContext.Generator | Error | The name is not valid
 OMCG0009 | OneModelContext.Generator | Error | More than one RequestContext or CancellationToken parameter
 OMCG0010 | OneModelContext.Generator | Error | The containing class is generic
 OMCG0011 | OneModelContext.Generator | Error | Unsupported property naming policy
+OMCG0012 | OneModelContext.Generator | Error | The UiResource or UiVisibility is not valid

@@ -46,6 +46,18 @@ public sealed class ToolAttribute : Attribute
 
   /// <summary>Sets <c>openWorldHint</c>: the tool reaches outside a closed world. Left out of the listing when never assigned.</summary>
   public bool OpenWorld { get; set; }
+
+  /// <summary>
+  /// MCP Apps: the <c>ui://</c> resource that renders this tool's results (<c>_meta.ui.resourceUri</c>). Setting it opts the server in to the
+  /// Apps extension; callers that did not declare it see an ordinary tool. Register the resource with <c>AddUiResource</c>.
+  /// </summary>
+  public string? UiResource { get; set; }
+
+  /// <summary>
+  /// MCP Apps: who may use the tool, <c>"model"</c> and/or <c>"app"</c>. Left out means both. Ignored without <see cref="UiResource"/>.
+  /// A tool visible only to <c>"app"</c> is hidden from callers without Apps.
+  /// </summary>
+  public string[]? UiVisibility { get; set; }
 }
 
 /// <summary>

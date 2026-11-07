@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,9 +26,20 @@ internal sealed class CallbackRequestHandler(ContextClientOptions options) : ICl
   {
     var listed = options.Capabilities;
     var elicits = options.OnElicit is not null || options.OnConfirm is not null;
-    if ((!elicits || listed.Elicitation is not null) && (options.OnSample is null || listed.Sampling is not null) && (options.OnListRoots is null || listed.Roots is not null))
+    if ((!elicits || listed.Elicitation is not null) && (options.OnSample is null || listed.Sampling is not null) && (options.OnListRoots is null || listed.Roots is not null) && options.Extensions.Count == 0)
     {
       return listed;
+    }
+
+    // Extensions the host opted in to are added to any it listed by hand; the options win for an identifier given twice.
+    var extensions = listed.Extensions;
+    if (options.Extensions.Count > 0)
+    {
+      extensions = listed.Extensions is null ? new Dictionary<string, JsonElement>(StringComparer.Ordinal) : new Dictionary<string, JsonElement>(listed.Extensions, StringComparer.Ordinal);
+      foreach (var extension in options.Extensions)
+      {
+        extensions[extension.Id] = extension.Settings;
+      }
     }
 
     return new ClientCapabilities
@@ -37,7 +49,7 @@ internal sealed class CallbackRequestHandler(ContextClientOptions options) : ICl
       Sampling = listed.Sampling ?? (options.OnSample is null ? null : new SamplingCapability()),
       Elicitation = listed.Elicitation ?? (elicits ? new ElicitationCapability() : null),
       Tasks = listed.Tasks,
-      Extensions = listed.Extensions,
+      Extensions = extensions,
       AdditionalProperties = listed.AdditionalProperties,
     };
   }

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using RecursiveAI.OneModelContext.Extensions;
 
 namespace RecursiveAI.OneModelContext.Protocol;
 
@@ -24,6 +25,7 @@ namespace RecursiveAI.OneModelContext.Protocol;
 [JsonSerializable(typeof(ClientCapabilities))]
 [JsonSerializable(typeof(ServerCapabilities))]
 [JsonSerializable(typeof(EmptyResult))]
+[JsonSerializable(typeof(ExtensionResult))]
 [JsonSerializable(typeof(RequestParams))]
 [JsonSerializable(typeof(PaginatedRequestParams))]
 [JsonSerializable(typeof(InputResponseRequestParams))]
