@@ -82,7 +82,10 @@ public sealed class ServerSessionState
   public string? SessionId { get; set; }
 
   /// <summary>Scratch space for the codec that owns the session.</summary>
-  public ConcurrentDictionary<string, object> Items { get; } = new(StringComparer.Ordinal);
+  public ConcurrentDictionary<string, object> Items => _items ?? Interlocked.CompareExchange(ref _items, new ConcurrentDictionary<string, object>(StringComparer.Ordinal), null) ?? _items!;
+
+  // Most states (every stateless request makes one) never use the scratch space, so the dictionary is made on first use.
+  private ConcurrentDictionary<string, object>? _items;
 }
 
 /// <summary>Where a server sends what is not the response to the request being handled.</summary>

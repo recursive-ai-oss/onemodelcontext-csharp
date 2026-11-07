@@ -23,12 +23,21 @@ internal sealed class ModernServerCodec : IServerCodec
     // Modern has no connection state to update; cancellation is handled by the connection before it gets here.
     ValueTask.CompletedTask;
 
+  private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Implementation, byte[]> ServerInfoMembers = new();
+
   public JsonRpcMessage EncodeResult(JsonRpcId id, PeerContext peer, Result result, IServerHost host)
   {
     var info = WireJsonContext.Default.GetTypeInfo(result.GetType())
       ?? throw new InvalidOperationException("The result type " + result.GetType().Name + " is not a protocol record.");
-    var serialized = JsonSerializer.SerializeToElement(result, info);
-    var wrapped = ModernEnvelope.WrapResult(serialized, host.Info, result is CacheableResult, (long)host.CacheTtl.TotalMilliseconds, host.CacheScope);
+    var bytes = new System.Buffers.ArrayBufferWriter<byte>(512);
+    using (var writer = new Utf8JsonWriter(bytes))
+    {
+      JsonSerializer.Serialize(writer, result, info);
+    }
+
+    // The server's identity is the same in every result, so its JSON is made once per server.
+    var serverInfo = ServerInfoMembers.GetValue(host.Info, static server => ModernEnvelope.ServerInfoMember(server));
+    var wrapped = ModernEnvelope.WrapSerializedResult(bytes.WrittenSpan, host.Info, result is CacheableResult, (long)host.CacheTtl.TotalMilliseconds, host.CacheScope, serverInfo);
     return new JsonRpcResultResponse(id, wrapped);
   }
 
@@ -82,7 +91,8 @@ internal sealed class ModernServerCodec : IServerCodec
     }
 
     var meta = metaElement.Deserialize(WireJsonContext.Default.MetaObject)!;
-    var capabilities = capabilitiesElement.Deserialize(WireJsonContext.Default.ClientCapabilities)!;
+    // The meta record already decoded the capabilities member; decoding it again would repeat the work on every request.
+    var capabilities = meta.ClientCapabilities ?? capabilitiesElement.Deserialize(WireJsonContext.Default.ClientCapabilities)!;
 
     Dictionary<string, JsonElement>? inputResponses = null;
     if (request.Params.TryGetProperty("inputResponses", out var responsesElement))

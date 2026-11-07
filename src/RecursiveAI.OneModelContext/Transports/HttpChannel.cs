@@ -64,7 +64,15 @@ internal sealed class HttpChannel : IJsonRpcChannel, IConcurrentWriteChannel
     _http = http;
     _ownsClient = ownsClient;
     _options = options;
-    _inbound = Channel.CreateBounded<Inbound>(new BoundedChannelOptions(Math.Max(1, options.MaxQueuedMessages)) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
+    _inbound = Channel.CreateBounded<Inbound>(new BoundedChannelOptions(Math.Max(1, options.MaxQueuedMessages))
+    {
+      SingleReader = true,
+      FullMode = BoundedChannelFullMode.Wait,
+
+      // The connection's read loop only classifies a message and hands it on (callers resume on the pool), so it can run on the thread that
+      // delivered the message instead of waiting for a pool thread of its own.
+      AllowSynchronousContinuations = true,
+    });
   }
 
   private enum TransportMode
