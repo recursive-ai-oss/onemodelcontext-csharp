@@ -4,6 +4,8 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="xunit.v3" Version="4.0.2" />
+    <!-- Coverage instrumentation for the fuzz harness only. -->
+    <PackageVersion Include="SharpFuzz" Version="2.2.0" />
   </ItemGroup>
   <!-- Roslyn, build time only, for the source generator. 4.8 is the compiler of the .NET 8 SDK; a generator built
        against it loads in every later compiler. -->

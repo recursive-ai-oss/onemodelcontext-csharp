@@ -73,7 +73,7 @@ internal sealed class TestServerCodec(ProtocolEra era, string version, bool elic
 
   private sealed class ForwardingChannel(IServerSink sink) : IInputChannel
   {
-    public ValueTask<JsonElement> RequestInputAsync(string method, JsonElement parameters, CancellationToken cancellationToken) =>
+    public ValueTask<JsonElement> RequestInputAsync(string method, JsonElement parameters, CancellationToken cancellationToken, string? key = null) =>
       sink.SendRequestAsync(method, parameters, cancellationToken);
   }
 }

@@ -50,6 +50,25 @@ public sealed class ContextClientOptions
   /// <summary>How long negotiation may take. Default 30 seconds.</summary>
   public TimeSpan ConnectTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
+  /// <summary>
+  /// How long to wait for a server to answer the probe of one era before concluding it does not speak that era and trying the next one.
+  /// A legacy server may answer a modern probe with an error, with nothing at all, or only after a long time; 2026-07-28 "stdio:
+  /// Backward Compatibility" says silence means legacy. Applies to every era tried except the last. Default 5 seconds.
+  /// </summary>
+  public TimeSpan ProbeTimeout { get; init; } = TimeSpan.FromSeconds(5);
+
+  /// <summary>
+  /// Remembers which era each server spoke, keyed by <see cref="ServerKey"/> or the transport's own key, so that reconnecting skips the
+  /// probe. Default <see cref="EraCache.Shared"/>; <c>null</c> turns remembering off. Used only with <see cref="EraPreference.Auto"/>.
+  /// </summary>
+  public IEraCache? EraCache { get; init; } = RecursiveAI.OneModelContext.EraCache.Shared;
+
+  /// <summary>
+  /// The key the era cache uses for this server, in place of <see cref="ContextTransport.ServerKey"/>. Set it when the transport cannot name
+  /// the server, or when two different servers share a command line.
+  /// </summary>
+  public string? ServerKey { get; init; }
+
   /// <summary>How long a request waits for its response. Default 5 minutes.</summary>
   public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromMinutes(5);
 
@@ -163,7 +182,7 @@ public sealed partial class ContextClient : IAsyncDisposable
     {
       using var timeout = new CancellationTokenSource(options.ConnectTimeout, options.TimeProvider);
       using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
-      var session = await NegotiateAsync(rpc, hello, options, linked.Token).ConfigureAwait(false);
+      var session = await NegotiateAsync(rpc, hello, options, options.ServerKey ?? transport.ServerKey, linked.Token).ConfigureAwait(false);
       var client = new ContextClient(rpc, session, hello, options, run);
       holder.Client = client;
       return client;
@@ -330,30 +349,74 @@ public sealed partial class ContextClient : IAsyncDisposable
   /// <summary>Closes the connection.</summary>
   public async ValueTask DisposeAsync() => await _rpc.DisposeAsync().ConfigureAwait(false);
 
-  private static async ValueTask<ClientSession> NegotiateAsync(JsonRpcConnection rpc, ClientHello hello, ContextClientOptions options, CancellationToken cancellationToken)
+  // 2026-07-28 versioning, "Backward Compatibility with Initialization-Based Versions": try the modern probe first, treat a failure that is
+  // not a recognized modern error (or silence) as a legacy server, remember what worked. The era cache only changes the order.
+  private static async ValueTask<ClientSession> NegotiateAsync(JsonRpcConnection rpc, ClientHello hello, ContextClientOptions options, string? serverKey, CancellationToken cancellationToken)
   {
-    var codecs = options.Codecs ?? DefaultCodecs.Client();
-    var tried = false;
-    foreach (var codec in codecs)
+    var codecs = new List<IClientCodec>();
+    foreach (var codec in options.Codecs ?? DefaultCodecs.Client())
     {
       if ((options.Era == EraPreference.Modern && codec.Era != ProtocolEra.Modern) || (options.Era == EraPreference.Legacy && codec.Era != ProtocolEra.Legacy))
       {
         continue;
       }
 
-      tried = true;
-      if (await codec.NegotiateAsync(rpc, hello, cancellationToken).ConfigureAwait(false) is { } session)
-      {
-        return session;
-      }
+      codecs.Add(codec);
     }
 
-    if (!tried)
+    if (codecs.Count == 0)
     {
       throw new ContextException("No protocol codec is available for era preference " + options.Era + ".");
     }
 
+    var cache = options.Era == EraPreference.Auto && serverKey is not null ? options.EraCache : null;
+    if (cache is not null && cache.TryGet(serverKey!, out var remembered))
+    {
+      // The remembered era goes first; the others stay as the fallback in case the server changed.
+      var index = codecs.FindIndex(c => c.Era == remembered);
+      if (index > 0)
+      {
+        var first = codecs[index];
+        codecs.RemoveAt(index);
+        codecs.Insert(0, first);
+      }
+    }
+
+    for (var i = 0; i < codecs.Count; i++)
+    {
+      var codec = codecs[i];
+      var session = i == codecs.Count - 1
+        ? await codec.NegotiateAsync(rpc, hello, cancellationToken).ConfigureAwait(false)
+        : await ProbeAsync(codec, rpc, hello, options, cancellationToken).ConfigureAwait(false);
+      if (session is not null)
+      {
+        cache?.Remember(serverKey!, session.Era);
+        return session;
+      }
+    }
+
+    cache?.Forget(serverKey!);
     throw new ProtocolVersionException(options.SupportedVersions, hello.ServerVersionsSeen);
+  }
+
+  private static async ValueTask<ClientSession?> ProbeAsync(IClientCodec codec, JsonRpcConnection rpc, ClientHello hello, ContextClientOptions options, CancellationToken cancellationToken)
+  {
+    if (options.ProbeTimeout <= TimeSpan.Zero || options.ProbeTimeout == Timeout.InfiniteTimeSpan)
+    {
+      return await codec.NegotiateAsync(rpc, hello, cancellationToken).ConfigureAwait(false);
+    }
+
+    using var probe = new CancellationTokenSource(options.ProbeTimeout, options.TimeProvider);
+    using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, probe.Token);
+    try
+    {
+      return await codec.NegotiateAsync(rpc, hello, linked.Token).ConfigureAwait(false);
+    }
+    catch (OperationCanceledException) when (probe.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+    {
+      // Silence: the server does not speak this era.
+      return null;
+    }
   }
 
   private static async ValueTask NotifyCancelledAsync(Holder holder, JsonRpcId id)

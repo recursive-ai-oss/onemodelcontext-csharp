@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using RecursiveAI.OneModelContext.JsonRpc;
@@ -40,6 +43,100 @@ public abstract class ContextTransport : IAsyncDisposable
     ArgumentNullException.ThrowIfNull(input);
     ArgumentNullException.ThrowIfNull(output);
     return new StreamTransport(input, output, maxLineBytes, leaveOpen);
+  }
+
+  /// <summary>
+  /// Starts a server as a child process and speaks newline-delimited JSON-RPC over its standard input and output (the MCP stdio
+  /// transport, client side). The child's standard error goes to <see cref="Diagnostics.ContextDiagnostics"/>. Disposing the client closes
+  /// the child's input, waits <see cref="ProcessTransportOptions.ShutdownGrace"/> for it to exit, then ends it.
+  /// </summary>
+  /// <param name="command">The executable, found on <c>PATH</c> if it has no directory. No shell is involved, so no quoting or expansion applies.</param>
+  /// <param name="arguments">The arguments, passed as given.</param>
+  /// <param name="options">Environment, working directory and limits; <c>null</c> for the defaults.</param>
+  /// <exception cref="ArgumentException"><paramref name="command"/> is empty.</exception>
+  public static ContextTransport Process(string command, IEnumerable<string>? arguments = null, ProcessTransportOptions? options = null)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(command);
+    return new ProcessTransport(command, arguments ?? [], options ?? new ProcessTransportOptions());
+  }
+
+  /// <summary>
+  /// Like <see cref="Process(string, IEnumerable{string}?, ProcessTransportOptions?)"/> for a command line such as
+  /// <c>npx -y some-server --flag "a b"</c>. Words split on spaces; single or double quotes group a word; inside double quotes a backslash
+  /// escapes a quote or a backslash. No shell runs, so there is no variable expansion, globbing or piping.
+  /// </summary>
+  /// <param name="commandLine">The command and its arguments.</param>
+  /// <param name="options">Environment, working directory and limits; <c>null</c> for the defaults.</param>
+  /// <exception cref="ArgumentException">The command line is empty or has an unclosed quote.</exception>
+  public static ContextTransport ProcessFromCommandLine(string commandLine, ProcessTransportOptions? options = null)
+  {
+    var words = SplitCommandLine(commandLine);
+    return Process(words[0], words.Skip(1), options);
+  }
+
+  /// <summary>
+  /// Names the server this transport reaches (the command line, or the origin of a URL) so that a client can remember which era it spoke
+  /// with it. <c>null</c> means the transport cannot say, and nothing is remembered.
+  /// </summary>
+  public virtual string? ServerKey => null;
+
+  internal static string[] SplitCommandLine(string commandLine)
+  {
+    ArgumentNullException.ThrowIfNull(commandLine);
+    var words = new List<string>();
+    var word = new StringBuilder();
+    var inWord = false;
+    var quote = '\0';
+    for (var i = 0; i < commandLine.Length; i++)
+    {
+      var c = commandLine[i];
+      if (quote != '\0')
+      {
+        if (c == quote)
+        {
+          quote = '\0';
+        }
+        else if (quote == '"' && c == '\\' && i + 1 < commandLine.Length && commandLine[i + 1] is '"' or '\\')
+        {
+          word.Append(commandLine[++i]);
+        }
+        else
+        {
+          word.Append(c);
+        }
+      }
+      else if (c is '"' or '\'')
+      {
+        quote = c;
+        inWord = true;
+      }
+      else if (char.IsWhiteSpace(c))
+      {
+        if (inWord)
+        {
+          words.Add(word.ToString());
+          word.Clear();
+          inWord = false;
+        }
+      }
+      else
+      {
+        word.Append(c);
+        inWord = true;
+      }
+    }
+
+    if (quote != '\0')
+    {
+      throw new ArgumentException("The command line has an unclosed quote.", nameof(commandLine));
+    }
+
+    if (inWord)
+    {
+      words.Add(word.ToString());
+    }
+
+    return words.Count == 0 ? throw new ArgumentException("The command line is empty.", nameof(commandLine)) : [.. words];
   }
 
   /// <summary>Opens the channel. A transport can be opened once.</summary>

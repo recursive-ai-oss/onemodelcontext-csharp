@@ -31,7 +31,7 @@ internal sealed class ModernInputChannel(PeerContext peer) : IInputChannel, IPen
   private readonly List<KeyValuePair<string, InputRequest>> _pending = [];
   private int _sequence;
 
-  public ValueTask<JsonElement> RequestInputAsync(string method, JsonElement parameters, CancellationToken cancellationToken)
+  public ValueTask<JsonElement> RequestInputAsync(string method, JsonElement parameters, CancellationToken cancellationToken, string? key = null)
   {
     // 2026-07-28 mrtr, server requirement 7: never ask for what the client has not declared.
     var missing = method switch
@@ -47,7 +47,8 @@ internal sealed class ModernInputChannel(PeerContext peer) : IInputChannel, IPen
       return ValueTask.FromException<JsonElement>(new MissingCapabilityException("The client did not declare the capability this request needs.", missing));
     }
 
-    var key = "input-" + Interlocked.Increment(ref _sequence).ToString(CultureInfo.InvariantCulture);
+    // A handler-chosen key must be the same on every attempt; the numbered default is stable because the handler asks in the same order.
+    key ??= "input-" + Interlocked.Increment(ref _sequence).ToString(CultureInfo.InvariantCulture);
     if (peer.InputResponses is { } answers && answers.TryGetValue(key, out var answer))
     {
       return ValueTask.FromResult(answer);

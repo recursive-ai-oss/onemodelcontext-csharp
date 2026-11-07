@@ -31,9 +31,34 @@ conformance/run.sh client --command "dotnet run --project ..." --out results --r
 conformance/run.sh regression --out results --url http://127.0.0.1:PORT/mcp --command "..."
 ```
 
-`regression` runs the scenarios named in [scenarios.txt](scenarios.txt), which is what continuous integration runs. The list is empty
-until a server and a client that pass scenarios are in the tree; an empty list passes. Servers must bind a loopback address and a free
-port; read the port back instead of fixing one.
+`regression` runs the scenarios named in [scenarios.txt](scenarios.txt), which is what continuous integration runs. Each line names
+the revision whose variant of the scenario runs (`--spec-version`). Servers must bind a loopback address and a free port; read the
+port back instead of fixing one.
+
+## The conformance server
+
+`conformance/Server` is a small program that serves a `ContextServer` full of the tools, resources and prompts the scenarios call.
+It ships in no package.
+
+```sh
+dotnet run --project conformance/Server -- --http --port 0     # Streamable HTTP on 127.0.0.1; prints the URL
+dotnet run --project conformance/Server -- --stdio             # newline-delimited JSON-RPC on stdin and stdout
+```
+
+The suite has no 2024-11-05 scenarios, and `--requirements` exists only for 2025-11-25 and 2026-07-28; the 2025-03-26 and 2025-06-18
+variants run with `--scenario ... --spec-version`, or `--spec-version` alone for every applicable scenario.
+
+## Results (suite 0.2.0-alpha.12, server over Streamable HTTP)
+
+| Run | Result |
+|---|---|
+| `--requirements 2025-11-25` | 80 checks passed, 0 failed (pending and added-after-release scenarios pass too) |
+| `--requirements 2026-07-28` | every scenario outside the extension scenarios passes; the Tasks scenarios are not run by CI |
+| `--spec-version 2025-06-18` | 56 checks passed, 0 failed |
+| `--spec-version 2025-03-26` | `server-session-lifecycle`, 3 of 3 |
+
+The two `list_changed` checks of `server-stateless` are warnings (the suite calls them SHOULD requirements): the suite mutates the
+server's lists and expects a notification on an open `subscriptions/listen` stream, and this server does not yet send one.
 
 ## The suite's scenario list (`list` output, 0.2.0-alpha.12)
 

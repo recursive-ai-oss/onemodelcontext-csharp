@@ -175,8 +175,9 @@ public interface IInputChannel
   /// <param name="method">The input request's method.</param>
   /// <param name="parameters">Its params.</param>
   /// <param name="cancellationToken">Cancels the wait.</param>
+  /// <param name="key">The name of the input request on the modern wire (its key in inputRequests and inputResponses); null numbers them input-1, input-2 and so on in order. Legacy ignores it.</param>
   /// <returns>The client's result for that request.</returns>
-  ValueTask<JsonElement> RequestInputAsync(string method, JsonElement parameters, CancellationToken cancellationToken);
+  ValueTask<JsonElement> RequestInputAsync(string method, JsonElement parameters, CancellationToken cancellationToken, string? key = null);
 }
 
 /// <summary>The server half of an era's wire behaviour. One instance serves every connection of its server.</summary>

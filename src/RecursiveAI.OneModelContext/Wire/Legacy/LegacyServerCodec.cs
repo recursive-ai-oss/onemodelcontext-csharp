@@ -293,7 +293,7 @@ internal sealed class LegacyServerCodec : IServerCodec
   /// <summary>Legacy input: a real server-initiated request on the same connection, gated on what the client declared.</summary>
   private sealed class LegacyInputChannel(PeerContext peer, IServerSink sink) : IInputChannel
   {
-    public async ValueTask<JsonElement> RequestInputAsync(string method, JsonElement parameters, CancellationToken cancellationToken)
+    public async ValueTask<JsonElement> RequestInputAsync(string method, JsonElement parameters, CancellationToken cancellationToken, string? key = null)
     {
       var capabilities = peer.ClientCapabilities;
       switch (method)
