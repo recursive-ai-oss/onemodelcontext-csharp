@@ -1040,8 +1040,9 @@ public sealed class AuthorizationServerFlowTests : IDisposable
   [Fact]
   public async Task Nothing_secret_reaches_diagnostics_security_events_or_responses_that_should_not_carry_it()
   {
-    var events = new List<DiagnosticEvent>();
-    using var subscription = ContextDiagnostics.Subscribe(events.Add);
+    // Diagnostics are process-wide: other tests publish from their own threads while this one reads.
+    var events = new System.Collections.Concurrent.ConcurrentQueue<DiagnosticEvent>();
+    using var subscription = ContextDiagnostics.Subscribe(events.Enqueue);
     var (code, verifier) = await _h.CodeAsync();
     var tokens = await _h.RedeemAsync(code, verifier);
     var access = tokens.GetProperty("access_token").GetString()!;

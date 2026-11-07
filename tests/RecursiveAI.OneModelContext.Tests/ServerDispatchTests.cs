@@ -122,8 +122,9 @@ public class ServerDispatchTests
   [Fact]
   public async Task An_unexpected_exception_in_a_tool_is_reported_without_its_message()
   {
-    var events = new List<DiagnosticEvent>();
-    using var subscription = ContextDiagnostics.Subscribe(events.Add);
+    // Diagnostics are process-wide: other tests publish from their own threads while this one reads.
+    var events = new System.Collections.Concurrent.ConcurrentQueue<DiagnosticEvent>();
+    using var subscription = ContextDiagnostics.Subscribe(events.Enqueue);
     var server = NewServer();
     server.Tools.Add(new ToolDefinition("boom", "d", ObjectSchema), (_, _) => throw new InvalidOperationException("connection string password=hunter2"));
 
