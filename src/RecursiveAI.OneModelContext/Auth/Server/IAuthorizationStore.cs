@@ -82,6 +82,12 @@ public sealed class AuthorizationCodeGrant
   /// <summary>When the code stops being valid.</summary>
   public DateTimeOffset ExpiresAt { get; init; }
 
+  /// <summary>
+  /// When the refresh family this code starts stops being valid. A redeemed code is kept as a spent marker until then, so a replay
+  /// after <see cref="ExpiresAt"/> still revokes what the code produced. Default: no later than <see cref="ExpiresAt"/>.
+  /// </summary>
+  public DateTimeOffset FamilyExpiresAt { get; init; }
+
   /// <summary>Whether the code was redeemed. A second redemption means the code leaked, and revokes the family.</summary>
   public bool Redeemed { get; set; }
 }
@@ -171,7 +177,7 @@ public interface IAuthorizationStore
   /// <summary>
   /// Atomically marks a code redeemed and returns it. Exactly one of two concurrent calls with the same hash gets
   /// <see cref="RedemptionStatus.Redeemed"/>; the other gets <see cref="RedemptionStatus.AlreadyRedeemed"/>. A redeemed code stays
-  /// until it would have expired, so a replay is recognised.
+  /// until its <see cref="AuthorizationCodeGrant.FamilyExpiresAt"/>, so a replay is recognised and revokes its family even after the code's own lifetime.
   /// </summary>
   /// <param name="codeHash">The code's hash.</param>
   /// <param name="now">The current time.</param>

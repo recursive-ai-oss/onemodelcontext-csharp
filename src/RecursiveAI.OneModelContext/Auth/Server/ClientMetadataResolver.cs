@@ -21,7 +21,7 @@ internal static class RedirectUriRules
   /// </summary>
   internal static bool IsValidRegistration(string value)
   {
-    if (value.Length is 0 or > 2048 || !Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Fragment.Length != 0 || value.Contains('#', StringComparison.Ordinal) || uri.UserInfo.Length != 0)
+    if (value.Length is 0 or > 2048 || !IsPlainUri(value) || !Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Fragment.Length != 0 || value.Contains('#', StringComparison.Ordinal) || uri.UserInfo.Length != 0)
     {
       return false;
     }
@@ -37,6 +37,23 @@ internal static class RedirectUriRules
     }
 
     return uri.Scheme.Contains('.', StringComparison.Ordinal);
+  }
+
+  /// <summary>
+  /// Printable ASCII only, no whitespace, control characters or backslash: <see cref="Uri"/> silently drops or rewrites those, so what was
+  /// checked would not be what goes into a <c>Location</c> header.
+  /// </summary>
+  internal static bool IsPlainUri(string value)
+  {
+    foreach (var c in value)
+    {
+      if (c is < '\u0021' or > '\u007e' or '\\')
+      {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   internal static bool IsLoopbackHost(Uri uri) =>
@@ -55,7 +72,13 @@ internal static class RedirectUriRules
       return true;
     }
 
-    if (!Uri.TryCreate(registered, UriKind.Absolute, out var a) || !Uri.TryCreate(requested, UriKind.Absolute, out var b))
+    if (!IsPlainUri(requested) || !Uri.TryCreate(registered, UriKind.Absolute, out var a) || !Uri.TryCreate(requested, UriKind.Absolute, out var b))
+    {
+      return false;
+    }
+
+    // A userinfo part can dress a different host up as a loopback one (http://127.0.0.1:80@host/): refuse it outright.
+    if (a.UserInfo.Length != 0 || b.UserInfo.Length != 0 || AuthorityOf(registered).Contains('@', StringComparison.Ordinal) || AuthorityOf(requested).Contains('@', StringComparison.Ordinal))
     {
       return false;
     }
@@ -68,6 +91,13 @@ internal static class RedirectUriRules
     // Everything but the port must still be identical: same host spelling, same path and query.
     return string.Equals(a.Host, b.Host, StringComparison.Ordinal)
       && string.Equals(StripPort(registered), StripPort(requested), StringComparison.Ordinal);
+  }
+
+  private static string AuthorityOf(string value)
+  {
+    var start = value.IndexOf("://", StringComparison.Ordinal) + 3;
+    var end = value.IndexOfAny(['/', '?', '#'], start);
+    return end < 0 ? value[start..] : value[start..end];
   }
 
   // "http://127.0.0.1:8080/cb?x=1" -> "http://127.0.0.1/cb?x=1"; operates on the text so no normalisation can hide a difference.
@@ -107,6 +137,10 @@ internal sealed class ClientMetadataResolver : IDisposable
   private readonly SemaphoreSlim _slots;
   private readonly ConcurrentDictionary<string, (RegisteredClient? Client, DateTimeOffset Until)> _clients = new(StringComparer.Ordinal);
   private readonly ConcurrentDictionary<string, (JsonWebKeySet? Keys, DateTimeOffset Until)> _keys = new(StringComparer.Ordinal);
+  private readonly object _cacheGate = new();
+  private readonly object _hostGate = new();
+  private readonly Dictionary<string, int> _inFlight = new(StringComparer.OrdinalIgnoreCase);
+  private readonly Dictionary<string, DateTimeOffset> _backoff = new(StringComparer.OrdinalIgnoreCase);
 
   internal ClientMetadataResolver(ClientMetadataDocumentOptions? options, GuardedFetchOptions keyFetch, TimeProvider time)
   {
@@ -125,19 +159,20 @@ internal sealed class ClientMetadataResolver : IDisposable
 
   internal async Task<RegisteredClient?> ResolveAsync(string clientId, CancellationToken cancellationToken)
   {
+    // A URL that can never be fetched is refused before it touches the cache or the network: junk ids must not take cache entries.
+    if (!IsValidClientIdUrl(clientId, out var uri) || (_options.AcceptClientId is { } accept && !accept(uri)))
+    {
+      return null;
+    }
+
     var now = _time.GetUtcNow();
     if (_clients.TryGetValue(clientId, out var cached) && cached.Until > now)
     {
       return cached.Client;
     }
 
-    var client = await FetchAsync(clientId, cancellationToken).ConfigureAwait(false);
-    // A valid result lives as the response allowed; a failed one briefly. Past the cap nothing new is cached, which only costs a refetch.
-    if (_clients.Count < _options.MaxCacheEntries || _clients.ContainsKey(clientId))
-    {
-      Cache(_clients, clientId, client.Client, client.Lifetime, now);
-    }
-
+    var client = await FetchAsync(clientId, uri, cancellationToken).ConfigureAwait(false);
+    Cache(_clients, clientId, client.Client, client.Lifetime, now);
     return client.Client;
   }
 
@@ -151,41 +186,154 @@ internal sealed class ClientMetadataResolver : IDisposable
 
     JsonWebKeySet? set = null;
     TimeSpan lifetime = _options.FailureCacheLifetime;
-    if (Uri.TryCreate(jwksUri, UriKind.Absolute, out var uri) && await EnterAsync(cancellationToken).ConfigureAwait(false))
+    if (Uri.TryCreate(jwksUri, UriKind.Absolute, out var uri) && !IsHostBackedOff(uri.Authority, now) && TryEnterHost(uri.Authority))
     {
       try
       {
-        var result = await (metadataDocumentClient ? _fetcher : _keyFetcher).GetAsync(uri, cancellationToken).ConfigureAwait(false);
-        if (result.Succeeded)
+        if (await EnterAsync(cancellationToken).ConfigureAwait(false))
         {
-          set = JsonWebKeySet.Parse(result.Body);
-          lifetime = set is null ? _options.FailureCacheLifetime : Clamp(result.CacheLifetime);
+          try
+          {
+            var result = await (metadataDocumentClient ? _fetcher : _keyFetcher).GetAsync(uri, cancellationToken).ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+              set = JsonWebKeySet.Parse(result.Body);
+              lifetime = set is null ? _options.FailureCacheLifetime : Clamp(result.CacheLifetime);
+            }
+            else
+            {
+              BackOffHost(uri.Authority, now);
+            }
+          }
+          finally
+          {
+            _slots.Release();
+          }
         }
       }
       finally
       {
-        _slots.Release();
+        LeaveHost(uri.Authority);
       }
     }
 
-    if (_keys.Count < _options.MaxCacheEntries || _keys.ContainsKey(jwksUri))
-    {
-      Cache(_keys, jwksUri, set, lifetime, now);
-    }
-
+    Cache(_keys, jwksUri, set, lifetime, now);
     return set;
   }
 
-  private static void Cache<T>(ConcurrentDictionary<string, (T? Value, DateTimeOffset Until)> map, string key, T? value, TimeSpan lifetime, DateTimeOffset now)
+  // Remembers a result. At the cap, entries past their time go first and then the one that would expire soonest, so a flood of junk
+  // ids can crowd out other entries but can never switch caching off.
+  private void Cache<T>(ConcurrentDictionary<string, (T? Value, DateTimeOffset Until)> map, string key, T? value, TimeSpan lifetime, DateTimeOffset now)
     where T : class
   {
-    if (lifetime > TimeSpan.Zero)
+    lock (_cacheGate)
     {
+      if (lifetime <= TimeSpan.Zero)
+      {
+        map.TryRemove(key, out _);
+        return;
+      }
+
+      var max = Math.Max(1, _options.MaxCacheEntries);
+      if (map.Count >= max && !map.ContainsKey(key))
+      {
+        foreach (var entry in map)
+        {
+          if (entry.Value.Until <= now)
+          {
+            map.TryRemove(entry.Key, out _);
+          }
+        }
+
+        while (map.Count >= max)
+        {
+          string? oldest = null;
+          var oldestUntil = DateTimeOffset.MaxValue;
+          foreach (var entry in map)
+          {
+            if (entry.Value.Until <= oldestUntil)
+            {
+              oldest = entry.Key;
+              oldestUntil = entry.Value.Until;
+            }
+          }
+
+          if (oldest is null || !map.TryRemove(oldest, out _))
+          {
+            break;
+          }
+        }
+      }
+
       map[key] = (value, now + lifetime);
     }
-    else
+  }
+
+  // ------------------------------------------------------------------------------------------------ per-host limits
+
+  // One slow or hostile host must not hold every fetch slot: a host gets MaxFetchesPerHost at a time, and after a failed fetch it is
+  // left alone for HostFailureBackoff.
+  private bool TryEnterHost(string host)
+  {
+    lock (_hostGate)
     {
-      map.TryRemove(key, out _);
+      _inFlight.TryGetValue(host, out var count);
+      if (count >= Math.Max(1, _options.MaxFetchesPerHost))
+      {
+        return false;
+      }
+
+      _inFlight[host] = count + 1;
+      return true;
+    }
+  }
+
+  private void LeaveHost(string host)
+  {
+    lock (_hostGate)
+    {
+      if (_inFlight.TryGetValue(host, out var count) && count > 1)
+      {
+        _inFlight[host] = count - 1;
+      }
+      else
+      {
+        _inFlight.Remove(host);
+      }
+    }
+  }
+
+  private bool IsHostBackedOff(string host, DateTimeOffset now)
+  {
+    lock (_hostGate)
+    {
+      return _backoff.TryGetValue(host, out var until) && until > now;
+    }
+  }
+
+  private void BackOffHost(string host, DateTimeOffset now)
+  {
+    if (_options.HostFailureBackoff <= TimeSpan.Zero)
+    {
+      return;
+    }
+
+    lock (_hostGate)
+    {
+      if (_backoff.Count >= Math.Max(1, _options.MaxCacheEntries))
+      {
+        foreach (var key in _backoff.Where(e => e.Value <= now).Select(e => e.Key).ToList())
+        {
+          _backoff.Remove(key);
+        }
+
+        if (_backoff.Count >= Math.Max(1, _options.MaxCacheEntries))
+        {
+          return;
+        }
+      }
+
+      _backoff[host] = now + _options.HostFailureBackoff;
     }
   }
 
@@ -211,37 +359,52 @@ internal sealed class ClientMetadataResolver : IDisposable
     }
   }
 
-  private async Task<(RegisteredClient? Client, TimeSpan Lifetime)> FetchAsync(string clientId, CancellationToken cancellationToken)
+  private async Task<(RegisteredClient? Client, TimeSpan Lifetime)> FetchAsync(string clientId, Uri uri, CancellationToken cancellationToken)
   {
     var failure = (Client: (RegisteredClient?)null, Lifetime: _options.FailureCacheLifetime);
-    if (!IsValidClientIdUrl(clientId, out var uri) || (_options.AcceptClientId is { } accept && !accept(uri)))
+    var now = _time.GetUtcNow();
+    if (IsHostBackedOff(uri.Authority, now) || !TryEnterHost(uri.Authority))
     {
-      return failure;
-    }
-
-    if (!await EnterAsync(cancellationToken).ConfigureAwait(false))
-    {
+      // Not cached: the answer says nothing about the document itself.
       return (null, TimeSpan.Zero);
     }
 
-    GuardedFetchResult result;
     try
     {
-      result = await _fetcher.GetAsync(uri, cancellationToken).ConfigureAwait(false);
+      if (!await EnterAsync(cancellationToken).ConfigureAwait(false))
+      {
+        return (null, TimeSpan.Zero);
+      }
+
+      GuardedFetchResult result;
+      try
+      {
+        result = await _fetcher.GetAsync(uri, cancellationToken).ConfigureAwait(false);
+      }
+      finally
+      {
+        _slots.Release();
+      }
+
+      if (!result.Succeeded)
+      {
+        BackOffHost(uri.Authority, now);
+        return failure;
+      }
+
+      var ct = result.ContentType;
+      if (ct is null || !(ct == "application/json" || ct.EndsWith("+json", StringComparison.Ordinal)))
+      {
+        return failure;
+      }
+
+      var client = Parse(clientId, result.Body, _time.GetUtcNow());
+      return client is null ? failure : (client, Clamp(result.CacheLifetime));
     }
     finally
     {
-      _slots.Release();
+      LeaveHost(uri.Authority);
     }
-
-    var ct = result.ContentType;
-    if (!result.Succeeded || ct is null || !(ct == "application/json" || ct.EndsWith("+json", StringComparison.Ordinal)))
-    {
-      return failure;
-    }
-
-    var client = Parse(clientId, result.Body, _time.GetUtcNow());
-    return client is null ? failure : (client, Clamp(result.CacheLifetime));
   }
 
   /// <summary>

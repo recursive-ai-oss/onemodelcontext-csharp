@@ -69,6 +69,7 @@ internal static class AuthorizationServerTarget
       TokenEndpointAuthMethod = "client_secret_basic",
       SecretHash = secretHash,
       GrantTypes = ["authorization_code", "refresh_token", "client_credentials", "urn:ietf:params:oauth:grant-type:jwt-bearer"],
+      Scopes = ["a", "b"],
       CreatedAt = DateTimeOffset.UnixEpoch,
     }, CancellationToken.None).AsTask().GetAwaiter().GetResult();
 

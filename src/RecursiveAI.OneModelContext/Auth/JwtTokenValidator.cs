@@ -46,6 +46,13 @@ public sealed class JwtTokenValidator : ITokenValidator
   /// <summary>Whether a token with no <c>exp</c> is refused. Default true; a token that never expires is rarely what a resource server wants.</summary>
   public bool RequireExpiration { get; init; } = true;
 
+  /// <summary>
+  /// Whether the JOSE header <c>typ</c> must be <c>at+jwt</c> (or <c>application/at+jwt</c>), as RFC 9068 section 4 requires of JWT access
+  /// tokens; it keeps an ID token or another JWT of the same issuer from being replayed as an access token. Default false, because
+  /// issuers that predate RFC 9068 omit it; turn it on for an issuer you know sets it.
+  /// </summary>
+  public bool RequireAccessTokenType { get; init; }
+
   /// <inheritdoc />
   public async ValueTask<TokenValidationResult> ValidateAsync(string accessToken, TokenValidationRequest request, CancellationToken cancellationToken)
   {
@@ -98,6 +105,16 @@ public sealed class JwtTokenValidator : ITokenValidator
     if (!verified)
     {
       return TokenValidationResult.Failure("The token's signature is not valid.");
+    }
+
+    // RFC 9068 section 4: the typ header is at+jwt, with or without the application/ prefix, compared case-insensitively.
+    if (RequireAccessTokenType)
+    {
+      var type = token.Type is { } t && t.StartsWith("application/", StringComparison.OrdinalIgnoreCase) ? t[12..] : token.Type;
+      if (!string.Equals(type, "at+jwt", StringComparison.OrdinalIgnoreCase))
+      {
+        return TokenValidationResult.Failure("The token is not an access token.");
+      }
     }
 
     return CheckClaims(token.Payload, request);

@@ -55,6 +55,34 @@ elif [[ "$target" == oauth ]]; then
   seed redirect '\x03code=abc&state=s&iss=https%3A%2F%2Fi.example'
   seed redirect-error '\x03error=access_denied&state=s&iss=https%3A%2F%2Fi.example&error_description=no'
   max_len=4096
+elif [[ "$target" == authorization-server ]]; then
+  # Byte 0 picks the endpoint (0 authorize GET, 1 authorize POST, 2 token, 3 revoke, 4 register, 5 resume link, 6 client metadata
+  # document, 7 metadata and keys); for token and revoke the first line is the Authorization header. A literal percent is written %%.
+  q='response_type=code&client_id=app&redirect_uri=https%%3A%%2F%%2Fapp.test%%2Fcb&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&state=s&scope=a%%20b&resource=https%%3A%%2F%%2Fmcp.fuzz%%2Fmcp'
+  seed authorize-get "\x00$q"
+  seed authorize-post "\x01$q"
+  seed authorize-loopback '\x00response_type=code&client_id=app&redirect_uri=http%%3A%%2F%%2F127.0.0.1%%3A9%%2Fcb&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256'
+  seed authorize-userinfo '\x00response_type=code&client_id=app&redirect_uri=http%%3A%%2F%%2F127.0.0.1%%3A80%%40evil.test%%2Fcb&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256'
+  seed token-code '\x02
+grant_type=authorization_code&client_id=app&code=abc&code_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk&redirect_uri=https%%3A%%2F%%2Fapp.test%%2Fcb'
+  seed token-cc '\x02Basic c3ZjOmZ1enotc2VjcmV0LTAxMjM0NTY3ODk=
+grant_type=client_credentials&scope=a%%20b'
+  seed token-refresh '\x02
+grant_type=refresh_token&client_id=app&refresh_token=abc'
+  seed token-bearer '\x02Basic c3ZjOmZ1enotc2VjcmV0LTAxMjM0NTY3ODk=
+grant_type=urn%%3Aietf%%3Aparams%%3Aoauth%%3Agrant-type%%3Ajwt-bearer&assertion=e30.e30.AA'
+  seed token-assertion '\x02
+grant_type=client_credentials&client_assertion_type=urn%%3Aietf%%3Aparams%%3Aoauth%%3Aclient-assertion-type%%3Ajwt-bearer&client_assertion=e30.e30.AA'
+  seed revoke '\x03
+token=abc&client_id=app'
+  seed register '\x04{"redirect_uris":["https://a.example/cb"],"client_name":"x","token_endpoint_auth_method":"none"}'
+  seed register-native '\x04{"redirect_uris":["http://127.0.0.1/cb"],"application_type":"native","grant_types":["authorization_code"]}'
+  seed resume '\x05eyJlIjoxfQ.AAAA'
+  seed document '\x06{"client_id":"https://client.fuzz/c.json","redirect_uris":["http://127.0.0.1/cb"],"token_endpoint_auth_method":"none"}'
+  seed document-jwks '\x06{"client_id":"https://client.fuzz/c.json","redirect_uris":["https://a.example/cb"],"token_endpoint_auth_method":"private_key_jwt","jwks_uri":"https://client.fuzz/k"}'
+  seed metadata '\x07
+'
+  max_len=4096
 elif [[ "$target" == listener ]]; then
   # The built-in listener's request head, chunked body and length body parsers.
   seed head-post '\x00POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 12'

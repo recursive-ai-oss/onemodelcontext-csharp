@@ -7,6 +7,14 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
 ### Changed
 
 - OAuth client hardening: a client secret, signing key or identity assertion is sent only to an issuer the application pinned (`ExpectedIssuer`, `PreRegisteredClient.Issuer`; error `issuer_required`); the loopback receiver ignores callbacks whose `state` is not the one in progress; a stale process adopts a refresh token another process rotated; plain-HTTP OAuth endpoints are allowed only for loopback resources; `OAuthClientOptions.HttpHandler` replaces `HttpClient` and must not follow redirects; a token file that cannot be read or is group/world-writable is never overwritten; a scope-less `insufficient_scope` no longer starts an authorization per request (`StepUpCooldown`). CLI: `--issuer`, secrets from `env:NAME`, `-` or `@file`, and `login` replaces stored tokens only after the new sign-in succeeds.
+- `AuthorizationServer` hardening: the metadata-document cache evicts instead of switching itself off, with a per-host fetch cap and a short
+  per-host backoff (`MaxFetchesPerHost`, `HostFailureBackoff`); Client Credentials and dynamically registered clients are refused scopes
+  unless a scope allow-list applies; scope strings must be RFC 6749 scope tokens; redirect URIs with control characters, whitespace,
+  backslashes or userinfo are refused and a redirect is never sent without a safe `Location`; `RequireConfidentialClient` defaults to
+  true; the default ID-JAG subject is `issuer#sub`; a spent authorization code is remembered until its refresh family expires
+  (`AuthorizationCodeGrant.FamilyExpiresAt`), in the memory, file and EF stores; the server's own validator requires `typ` `at+jwt`
+  (`JwtTokenValidator.RequireAccessTokenType` for others); client secrets use a salted HMAC-SHA-256 hash (PBKDF2 hashes still verify).
+  `ApplyAuthorizationStore` takes an optional binary collation for `client_id`.
 
 ### Added
 

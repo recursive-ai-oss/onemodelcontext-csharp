@@ -146,11 +146,23 @@ public sealed class ClientMetadataDocumentOptions
   /// <summary>How long a failed fetch is remembered, so that repeated requests for a bad URL do not repeat the fetch. Default 30 seconds.</summary>
   public TimeSpan FailureCacheLifetime { get; init; } = TimeSpan.FromSeconds(30);
 
-  /// <summary>Most documents remembered at once. Default 1000; beyond it new documents are fetched on each use.</summary>
+  /// <summary>Most documents remembered at once. Default 1000; at the limit, expired entries go first, then the one that expires soonest.</summary>
   public int MaxCacheEntries { get; init; } = 1000;
 
   /// <summary>Most fetches in flight at once. Default 8; further requests wait, and give up with the fetch timeout.</summary>
   public int MaxConcurrentFetches { get; init; } = 8;
+
+  /// <summary>
+  /// Most fetches in flight to one host at once. Default 2; more are refused at once (the sign-in fails) instead of waiting, so a single
+  /// slow host cannot take every slot of <see cref="MaxConcurrentFetches"/>.
+  /// </summary>
+  public int MaxFetchesPerHost { get; init; } = 2;
+
+  /// <summary>
+  /// How long a host is left alone after a fetch from it failed (timeout, error status, oversized body). Default 10 seconds; zero turns it
+  /// off. Requests for other documents on that host fail at once during that time.
+  /// </summary>
+  public TimeSpan HostFailureBackoff { get; init; } = TimeSpan.FromSeconds(10);
 
   /// <summary>Decides which client identifier URLs are acceptable at all, before any fetch. Default: any HTTPS URL.</summary>
   public Func<Uri, bool>? AcceptClientId { get; init; }
@@ -176,12 +188,15 @@ public sealed class EnterpriseAuthorizationOptions
 
   /// <summary>
   /// Maps the IdP's user to the subject of the access token, or returns null to refuse the assertion. Default: the assertion's
-  /// <c>sub</c> unchanged. A subject is only unique together with its issuer, so a host that trusts several IdPs should map it.
+  /// <c>sub</c> prefixed with the issuer and <c>#</c> (<c>https://idp.example#alice</c>), because a subject is only unique together with its issuer.
   /// </summary>
   public Func<IdentityAssertion, CancellationToken, ValueTask<string?>>? ResolveSubject { get; init; }
 
-  /// <summary>Whether the client must authenticate with a secret or key. Default false, as the extension allows a public client identified by its metadata document.</summary>
-  public bool RequireConfidentialClient { get; init; }
+  /// <summary>
+  /// Whether the client must authenticate with a secret or key. Default true: an ID-JAG is a credential for a user's access, and a public
+  /// client has nothing that keeps another party from presenting it. Set false only to accept public clients that the extension allows.
+  /// </summary>
+  public bool RequireConfidentialClient { get; init; } = true;
 
   /// <summary>The longest an ID-JAG may live from <c>iat</c> to <c>exp</c>. Default 10 minutes; longer ones are refused.</summary>
   public TimeSpan MaxAssertionLifetime { get; init; } = TimeSpan.FromMinutes(10);
