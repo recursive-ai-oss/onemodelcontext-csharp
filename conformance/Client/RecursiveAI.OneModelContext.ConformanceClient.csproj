@@ -10,6 +10,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>RecursiveAI.OneModelContext.ConformanceClient</RootNamespace>
+    <NoWarn>$(NoWarn);OMC0001;OMC0002;OMC0003;OMCX0002</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
