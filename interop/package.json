@@ -1,0 +1,14 @@
+{
+  "name": "onemodelcontext-interop-oracles",
+  "private": true,
+  "description": "Pinned oracles for the interop matrix. install.sh installs them outside the repository; they are run, never read.",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@modelcontextprotocol/inspector": "2.14.0",
+    "@modelcontextprotocol/server-everything": "2.2.1",
+    "@modelcontextprotocol/server-filesystem": "2.2.0",
+    "@modelcontextprotocol/server-memory": "2.1.0",
+    "zod": "3.25.76"
+  }
+}

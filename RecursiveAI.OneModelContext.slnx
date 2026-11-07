@@ -22,6 +22,11 @@
     <Project Path="tests/RecursiveAI.OneModelContext.TestServer/RecursiveAI.OneModelContext.TestServer.csproj" />
     <Project Path="tests/RecursiveAI.OneModelContext.LegacyStdio/RecursiveAI.OneModelContext.LegacyStdio.csproj" />
   </Folder>
+  <Folder Name="/interop/">
+    <Project Path="interop/cs/RecursiveAI.OneModelContext.InteropCsSdk.csproj" />
+    <Project Path="interop/ours/Client/RecursiveAI.OneModelContext.InteropClient.csproj" />
+    <Project Path="interop/ours/Server/RecursiveAI.OneModelContext.InteropServer.csproj" />
+  </Folder>
   <Folder Name="/conformance/">
     <Project Path="conformance/Client/RecursiveAI.OneModelContext.ConformanceClient.csproj" />
     <Project Path="conformance/Server/RecursiveAI.OneModelContext.ConformanceServer.csproj" />

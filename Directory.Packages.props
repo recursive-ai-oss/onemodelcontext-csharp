@@ -25,6 +25,11 @@
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.AI" Version="10.11.0" />
   </ItemGroup>
+  <!-- Interop project only: the official C# SDK, run as a reference client and server. -->
+  <ItemGroup>
+    <PackageVersion Include="ModelContextProtocol" Version="2.4.0" />
+    <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.4.0" />
+  </ItemGroup>
   <!-- Roslyn, build time only, for the source generator. 4.8 is the compiler of the .NET 8 SDK; a generator built
        against it loads in every later compiler. -->
   <ItemGroup>
