@@ -9,3 +9,6 @@ Build and test tooling used by this repository, none of which is distributed in 
 - `xunit.v3` (Apache-2.0), referenced by the test project only.
 - `@modelcontextprotocol/conformance`, the protocol's conformance suite, installed from npm by `conformance/run.sh` and run as a separate
   process; nothing from it is copied into this repository. Its licence is recorded in `conformance/README.md`.
+
+The adapter packages reference one library each, as a package dependency (nothing is copied into them). `RecursiveAI.OneModelContext.EntityFrameworkCore`
+references `Microsoft.EntityFrameworkCore` and `Microsoft.EntityFrameworkCore.Relational` (MIT); its tests use `Microsoft.EntityFrameworkCore.Sqlite` (MIT).

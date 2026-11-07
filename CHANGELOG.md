@@ -6,6 +6,9 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
 
 ### Added
 
+- `RecursiveAI.OneModelContext.EntityFrameworkCore`: `EfAuthorizationStore<TContext>` and `EfTokenStore<TContext>` over your own `DbContext`
+  (`modelBuilder.ApplyContextStores()`), for authorization servers and clients that run as several instances. Single-use codes, refresh
+  rotation and assertion replay checks are conditional updates, so they hold when instances race. See `docs/stores.md`.
 - The JSON-RPC 2.0 base layer: message model, a reader that never throws on bad input, a writer, newline-delimited framing over any duplex
   stream with a bounded line length, and a connection that correlates responses, runs incoming requests concurrently and supports
   cancellation.
