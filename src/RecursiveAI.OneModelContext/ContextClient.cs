@@ -65,9 +65,11 @@ public sealed class ContextClientOptions
   public Func<string, CancellationToken, ValueTask<bool>>? OnConfirm { get; init; }
 
   /// <summary>Answers the server's requests for a model completion (<c>sampling/createMessage</c>). Setting it declares the sampling capability. Default: none.</summary>
+  [Obsolete(DeprecatedFeatures.Sampling, DiagnosticId = DeprecatedFeatures.SamplingId)]
   public Func<CreateMessageRequestParams, CancellationToken, ValueTask<CreateMessageResult>>? OnSample { get; init; }
 
   /// <summary>Answers the server's request for the client's roots (<c>roots/list</c>). Setting it declares the roots capability. Default: none.</summary>
+  [Obsolete(DeprecatedFeatures.Roots, DiagnosticId = DeprecatedFeatures.RootsId)]
   public Func<CancellationToken, ValueTask<ListRootsResult>>? OnListRoots { get; init; }
 
   /// <summary>How long negotiation may take. Default 30 seconds.</summary>

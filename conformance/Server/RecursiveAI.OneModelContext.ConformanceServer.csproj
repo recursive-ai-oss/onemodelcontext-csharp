@@ -1,7 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
-  <!-- The server the protocol's conformance suite is pointed at, over Streamable HTTP (Kestrel hosts it here because this project
-       ships in no package), and over stdio for interoperability checks. It exposes what the suite's scenarios ask for. -->
+  <!-- The server the protocol's conformance suite is pointed at, over Streamable HTTP (through the ASP.NET Core adapter), and over stdio for interoperability checks. It exposes what the suite's scenarios ask for. -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <OutputType>Exe</OutputType>
@@ -9,10 +8,12 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>RecursiveAI.OneModelContext.ConformanceServer</RootNamespace>
+    <!-- The suite still runs scenarios for Sampling, Roots and Logging, so this server uses them. -->
+    <NoWarn>$(NoWarn);OMC0001;OMC0002;OMC0003</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../src/RecursiveAI.OneModelContext/RecursiveAI.OneModelContext.csproj" />
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext.AspNetCore/RecursiveAI.OneModelContext.AspNetCore.csproj" />
   </ItemGroup>
 
 </Project>

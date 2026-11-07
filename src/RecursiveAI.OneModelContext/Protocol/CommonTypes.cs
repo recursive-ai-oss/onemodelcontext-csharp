@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -205,10 +206,12 @@ public sealed class ClientCapabilities : WireObject
 
   /// <summary>The client can list roots (deprecated in 2026-07-28).</summary>
   [JsonPropertyName("roots")]
+  [Obsolete(DeprecatedFeatures.Roots, DiagnosticId = DeprecatedFeatures.RootsId)]
   public RootsCapability? Roots { get; init; }
 
   /// <summary>The client can answer sampling requests (deprecated in 2026-07-28).</summary>
   [JsonPropertyName("sampling")]
+  [Obsolete(DeprecatedFeatures.Sampling, DiagnosticId = DeprecatedFeatures.SamplingId)]
   public SamplingCapability? Sampling { get; init; }
 
   /// <summary>The client can answer elicitation requests.</summary>
@@ -226,6 +229,7 @@ public sealed class ClientCapabilities : WireObject
 }
 
 /// <summary>The <c>roots</c> client capability.</summary>
+[Obsolete(DeprecatedFeatures.Roots, DiagnosticId = DeprecatedFeatures.RootsId)]
 public sealed class RootsCapability : WireObject
 {
   /// <summary>The client sends <c>notifications/roots/list_changed</c> (legacy).</summary>
@@ -234,6 +238,7 @@ public sealed class RootsCapability : WireObject
 }
 
 /// <summary>The <c>sampling</c> client capability.</summary>
+[Obsolete(DeprecatedFeatures.Sampling, DiagnosticId = DeprecatedFeatures.SamplingId)]
 public sealed class SamplingCapability : WireObject
 {
   /// <summary>The client honours <c>includeContext</c> other than <c>none</c>.</summary>
@@ -271,6 +276,7 @@ public sealed class ServerCapabilities : WireObject
   /// <summary>The server sends log messages (deprecated in 2026-07-28).</summary>
   [JsonPropertyName("logging")]
   [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+  [Obsolete(DeprecatedFeatures.Logging, DiagnosticId = DeprecatedFeatures.LoggingId)]
   public JsonElement Logging { get; init; }
 
   /// <summary>The server supports <c>completion/complete</c>.</summary>
