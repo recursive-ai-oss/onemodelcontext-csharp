@@ -16,6 +16,7 @@
 !/templates/
 !/conformance/
 !/fuzz/
+!/bench/
 !/docs/
 !/README.md
 !/PACKAGE.md

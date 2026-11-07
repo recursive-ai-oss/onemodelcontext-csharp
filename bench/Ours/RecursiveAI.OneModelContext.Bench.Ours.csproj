@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>omc-bench</AssemblyName>
+    <RootNamespace>Bench</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- -p:BenchAot=true publishes this app with NativeAOT (a project property, not PublishAot itself, so it does not flow into referenced projects). -->
+  <PropertyGroup Condition="'$(BenchAot)' == 'true'">
+    <PublishAot>true</PublishAot>
+    <RuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../Shared/*.cs" />
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext.AspNetCore/RecursiveAI.OneModelContext.AspNetCore.csproj" />
+  </ItemGroup>
+
+</Project>
