@@ -10,10 +10,12 @@
 
   <ItemGroup>
     <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="../../src/RecursiveAI.OneModelContext/RecursiveAI.OneModelContext.csproj" />
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext.Generator/RecursiveAI.OneModelContext.Generator.csproj" OutputItemType="Analyzer" />
   </ItemGroup>
 
 </Project>

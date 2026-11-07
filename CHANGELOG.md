@@ -13,3 +13,9 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
 - `ContextServer`, `ContextClient`, `RequestContext` and `ContextTransport`, with the codec contract that the two protocol eras implement.
 - Typed errors, an `ActivitySource` and `Meter` named `RecursiveAI.OneModelContext`, a diagnostics event stream and a per-request audit hook.
 - The `RecursiveAI.OneModelContext` and `RecursiveAI.OneModelContext.Cli` packages, with the source generator bundled as an analyzer.
+- `[Tool]`, `[Resource]` and `[Prompt]` with a source generator that writes JSON Schema 2020-12 input and output schemas from signatures and doc
+  comments, and invokers that bind arguments through source-generated System.Text.Json metadata without reflection (diagnostics `OMCG0001`
+  to `OMCG0011`). See `docs/tool-schemas.md`.
+- `server.Tool(...)`, `server.Resource(...)` and `server.Prompt(...)`: a reflection quick path that writes the same schemas and is annotated
+  as not trim- or AOT-safe.
+- `ModelContext.ServeAsync` and `ModelContext.ConnectAsync` for the happy path, and a NativeAOT stdio server sample.
