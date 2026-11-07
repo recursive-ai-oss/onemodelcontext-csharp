@@ -48,17 +48,43 @@ dotnet run --project conformance/Server -- --stdio             # newline-delimit
 The suite has no 2024-11-05 scenarios, and `--requirements` exists only for 2025-11-25 and 2026-07-28; the 2025-03-26 and 2025-06-18
 variants run with `--scenario ... --spec-version`, or `--spec-version` alone for every applicable scenario.
 
-## Results (suite 0.2.0-alpha.12, server over Streamable HTTP)
+## Results (suite 0.2.0-alpha.12, every scenario the suite lists)
 
-| Run | Result |
+Server, run by `gate-server.sh` on both hosts (`listener` and `aspnetcore`), with the same result on each:
+
+| Revision | Scenarios | Result |
+|---|---|---|
+| 2026-07-28 | 35 | all pass |
+| 2025-11-25 | 34 | all pass |
+| 2025-06-18 | 27 | all pass |
+| 2025-03-26 | 1 | all pass |
+| extensions (Tasks, Skills) | 13 | all pass; the suite itself skips `tasks-status-notifications` |
+
+Client, run by `gate-client.sh` with the conformance client:
+
+| Revision | Scenarios | Result |
+|---|---|---|
+| 2026-07-28 | 33 | all pass |
+| 2025-11-25 | 19 | all pass |
+| 2025-06-18 | 5 | all pass |
+| 2025-03-26 | 2 | all pass |
+| extensions | 10 | 7 pass; 3 disputed / out of scope (below) |
+
+The suite lists no scenarios for 2024-11-05; that revision is covered by the interop harness (`interop/`).
+
+### Disputed / out of scope
+
+These scenarios fail because they test authorization extensions this library does not implement. They are listed here rather
+than hidden, and they are not in the regression list.
+
+| Scenario | Why it is out of scope |
 |---|---|
-| `--requirements 2025-11-25` | 80 checks passed, 0 failed (pending and added-after-release scenarios pass too) |
-| `--requirements 2026-07-28` | every scenario outside the extension scenarios passes; the Tasks scenarios are not run by CI |
-| `--spec-version 2025-06-18` | 56 checks passed, 0 failed |
-| `--spec-version 2025-03-26` | `server-session-lifecycle`, 3 of 3 |
+| `auth/dpop` | DPoP for MCP (SEP-1932, RFC 9449) is an Experimental extension (`ext-auth/specification/experimental/`). The extensions overview says the Experimental stage guarantees nothing and the design may change or disappear. This library ships Stable extensions only. |
+| `auth/dpop-nonce` | Same as `auth/dpop`. |
+| `auth/wif-jwt-bearer` | Workload Identity Federation (SEP-1933) is a proposal, not yet an extension at any stage. |
 
-The two `list_changed` checks of `server-stateless` are warnings (the suite calls them SHOULD requirements): the suite mutates the
-server's lists and expects a notification on an open `subscriptions/listen` stream, and this server does not yet send one.
+The Stable authorization extensions (`modelcontextprotocol.io/extensions/auth/overview`) are Client Credentials and Enterprise-Managed
+Authorization; both are implemented and their client scenarios pass. DPoP will be added in a minor release once it reaches Beta or Stable.
 
 ## The authorization server
 
