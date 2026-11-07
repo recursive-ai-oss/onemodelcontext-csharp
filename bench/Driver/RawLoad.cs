@@ -90,7 +90,7 @@ internal static partial class RawLoad
     return m.Success ? long.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) : 0;
   }
 
-  [GeneratedRegex("\"text\"\\s*:\\s*\"(\\d+) \\d+\"")]
+  [GeneratedRegex("\"text\"\\s*:\\s*\"(\\d+) \\d+ \\d+\"")]
   private static partial Regex StatsPattern();
 
   private static async Task<(HttpResponseMessage Response, string Body)> Post(HttpClient http, string url, string body, string? session, string? version, bool modern = false, string tool = "echo")

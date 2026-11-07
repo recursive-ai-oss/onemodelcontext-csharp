@@ -59,8 +59,8 @@ internal readonly record struct MessageShape(MessageKind Kind, JsonRpcId Id, str
           }
           else if (reader.TokenType == JsonTokenType.Number)
           {
-            id = JsonRpcId.TryFromElement(JsonDocument.ParseValue(ref reader).RootElement, out var parsed) ? parsed : default;
-            continue;
+            // The verbatim number text, as JsonRpcId keeps it.
+            id = JsonRpcId.FromNumberText(Encoding.UTF8.GetString(reader.ValueSpan));
           }
         }
         else if (isMethod && reader.TokenType == JsonTokenType.String)

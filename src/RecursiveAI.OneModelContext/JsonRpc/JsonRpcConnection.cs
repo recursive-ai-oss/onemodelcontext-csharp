@@ -84,6 +84,7 @@ public sealed class JsonRpcConnection : IAsyncDisposable
   private readonly IJsonRpcChannel _channel;
   private readonly JsonRpcConnectionOptions _options;
   private readonly SemaphoreSlim _writeLock = new(1, 1);
+  private readonly bool _channelWritesConcurrently;
   private readonly ConcurrentDictionary<JsonRpcId, TaskCompletionSource<JsonRpcMessage>> _pending = new();
   private readonly ConcurrentDictionary<JsonRpcId, IncomingRequest> _incoming = new();
   private readonly ConcurrentDictionary<Task, byte> _active = new();
@@ -100,6 +101,7 @@ public sealed class JsonRpcConnection : IAsyncDisposable
   {
     ArgumentNullException.ThrowIfNull(channel);
     _channel = channel;
+    _channelWritesConcurrently = channel is IConcurrentWriteChannel;
     _options = options ?? new JsonRpcConnectionOptions();
   }
 
@@ -399,29 +401,54 @@ public sealed class JsonRpcConnection : IAsyncDisposable
     await TrySendBytesAsync(buffer.WrittenMemory).ConfigureAwait(false);
   }
 
-  private async Task HandleAndRespondAsync(JsonRpcRequest request)
+  // The request is admitted and registered on the read loop, so a cancellation that arrives next finds it; the handler itself runs on the
+  // thread pool, so the read loop goes straight on to the next message instead of waiting for the handler and the reply to be written.
+  private Task HandleAndRespondAsync(JsonRpcRequest request)
   {
-    var response = await HandleRequestAsync(request).ConfigureAwait(false);
+    var (entry, rejection) = Admit(request);
+    if (entry is null)
+    {
+      return TrySendAsync(rejection!).AsTask();
+    }
+
+    return Task.Run(() => RunAndRespondAsync(request, entry));
+  }
+
+  private async Task RunAndRespondAsync(JsonRpcRequest request, IncomingRequest entry)
+  {
+    var response = await RunHandlerAsync(request, entry).ConfigureAwait(false);
     if (response is not null)
     {
       await TrySendAsync(response).ConfigureAwait(false);
     }
   }
 
-  private async ValueTask<JsonRpcMessage?> HandleRequestAsync(JsonRpcRequest request)
+  private ValueTask<JsonRpcMessage?> HandleRequestAsync(JsonRpcRequest request)
+  {
+    var (entry, rejection) = Admit(request);
+    return entry is null ? ValueTask.FromResult<JsonRpcMessage?>(rejection) : RunHandlerAsync(request, entry);
+  }
+
+  // Counts the request against the limits and registers it as in flight. Returns the entry, or the error to answer with.
+  private (IncomingRequest? Entry, JsonRpcMessage? Rejection) Admit(JsonRpcRequest request)
   {
     if (_incoming.Count >= _options.MaxConcurrentRequests)
     {
-      return new JsonRpcErrorResponse(request.Id, new JsonRpcError(JsonRpcErrorCodes.ServerBusy, "Too many requests in flight."));
+      return (null, new JsonRpcErrorResponse(request.Id, new JsonRpcError(JsonRpcErrorCodes.ServerBusy, "Too many requests in flight.")));
     }
 
     var entry = new IncomingRequest(CancellationTokenSource.CreateLinkedTokenSource(_closed.Token));
     if (!_incoming.TryAdd(request.Id, entry))
     {
       entry.Cts.Dispose();
-      return new JsonRpcErrorResponse(request.Id, new JsonRpcError(JsonRpcErrorCodes.InvalidRequest, "Invalid request: a request with this id is already in flight."));
+      return (null, new JsonRpcErrorResponse(request.Id, new JsonRpcError(JsonRpcErrorCodes.InvalidRequest, "Invalid request: a request with this id is already in flight.")));
     }
 
+    return (entry, null);
+  }
+
+  private async ValueTask<JsonRpcMessage?> RunHandlerAsync(JsonRpcRequest request, IncomingRequest entry)
+  {
     try
     {
       if (_options.RequestHandler is null)
@@ -497,6 +524,12 @@ public sealed class JsonRpcConnection : IAsyncDisposable
 
   private void Track(Task task)
   {
+    if (task.IsCompleted)
+    {
+      // Handlers that finished without waiting need no tracking.
+      return;
+    }
+
     _active[task] = 0;
     _ = task.ContinueWith(static (t, state) => ((ConcurrentDictionary<Task, byte>)state!).TryRemove(t, out _), _active, TaskScheduler.Default);
   }
@@ -532,7 +565,12 @@ public sealed class JsonRpcConnection : IAsyncDisposable
       throw new JsonRpcClosedException("The connection is closed.");
     }
 
-    await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+    var serialise = !_channelWritesConcurrently;
+    if (serialise)
+    {
+      await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     try
     {
       await _channel.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
@@ -543,7 +581,10 @@ public sealed class JsonRpcConnection : IAsyncDisposable
     }
     finally
     {
-      _writeLock.Release();
+      if (serialise)
+      {
+        _writeLock.Release();
+      }
     }
   }
 

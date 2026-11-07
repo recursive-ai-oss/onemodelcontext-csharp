@@ -23,11 +23,11 @@ internal static class Payloads
     return i >= 0 ? int.Parse(args[i + 1], CultureInfo.InvariantCulture) : 0;
   }
 
-  /// <summary>Bytes allocated so far by this process and its peak working set in bytes, as one line.</summary>
+  /// <summary>Bytes allocated so far by this process, its peak working set in bytes and its CPU time in microseconds, as one line.</summary>
   public static string Stats()
   {
     using var process = Process.GetCurrentProcess();
-    return GC.GetTotalAllocatedBytes(false).ToString(CultureInfo.InvariantCulture) + " " + process.PeakWorkingSet64.ToString(CultureInfo.InvariantCulture);
+    return GC.GetTotalAllocatedBytes(false).ToString(CultureInfo.InvariantCulture) + " " + process.PeakWorkingSet64.ToString(CultureInfo.InvariantCulture) + " " + ((long)(process.TotalProcessorTime.TotalMilliseconds * 1000)).ToString(CultureInfo.InvariantCulture);
   }
 
   private static byte[] CreateImage()

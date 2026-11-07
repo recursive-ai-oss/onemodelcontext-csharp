@@ -12,6 +12,116 @@ namespace RecursiveAI.OneModelContext.Tests.JsonRpc;
 
 public class NewlineChannelTests
 {
+  [Fact]
+  public async Task Queued_writes_keep_their_order_and_all_arrive_after_dispose()
+  {
+    var sink = new MemoryStream();
+    var channel = new NewlineChannel(new MemoryStream(), sink, leaveOpen: true);
+    var writers = Enumerable.Range(0, 200).Select(i => Task.Run(async () => await channel.WriteAsync(Encoding.UTF8.GetBytes("{\"n\":" + i + "}"), CancellationToken.None), TestContext.Current.CancellationToken)).ToArray();
+    await Task.WhenAll(writers);
+    for (var i = 0; i < 50; i++)
+    {
+      await channel.WriteAsync(Encoding.UTF8.GetBytes("{\"seq\":" + i + "}"), CancellationToken.None);
+    }
+
+    await channel.DisposeAsync();
+    var lines = Encoding.UTF8.GetString(sink.ToArray()).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+    Assert.Equal(250, lines.Length);
+    var seq = lines.Where(l => l.Contains("seq", StringComparison.Ordinal)).ToArray();
+    Assert.Equal(Enumerable.Range(0, 50).Select(i => "{\"seq\":" + i + "}"), seq);
+  }
+
+  [Fact]
+  public async Task A_writer_past_the_queue_bound_waits_for_the_stream()
+  {
+    var slow = new GatedStream();
+    await using var channel = new NewlineChannel(new MemoryStream(), slow, leaveOpen: true);
+    var big = new byte[NewlineChannel.MaxQueuedBytes];
+    Array.Fill(big, (byte)'x');
+
+    // The first message is over the bound, so its writer waits until the drain has taken it; the drain then sticks on the gated stream.
+    await channel.WriteAsync(big, CancellationToken.None);
+    var blocked = channel.WriteAsync(big, CancellationToken.None).AsTask();
+    await Task.Delay(100, TestContext.Current.CancellationToken);
+    Assert.False(blocked.IsCompleted);
+    slow.Open();
+    await blocked.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+  }
+
+  [Fact]
+  public async Task A_failed_stream_is_reported_by_the_next_write()
+  {
+    await using var channel = new NewlineChannel(new MemoryStream(), new BrokenStream(), leaveOpen: true);
+    await channel.WriteAsync(Encoding.UTF8.GetBytes("{}"), CancellationToken.None);
+    var failure = await Record.ExceptionAsync(async () =>
+    {
+      for (var i = 0; i < 100; i++)
+      {
+        await Task.Delay(20, TestContext.Current.CancellationToken);
+        await channel.WriteAsync(Encoding.UTF8.GetBytes("{}"), CancellationToken.None);
+      }
+    });
+    Assert.IsType<IOException>(failure);
+  }
+
+  private sealed class GatedStream : Stream
+  {
+    private readonly TaskCompletionSource _open = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public void Open() => _open.TrySetResult();
+
+    public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) => await _open.Task.WaitAsync(cancellationToken);
+
+    public override bool CanRead => false;
+
+    public override bool CanSeek => false;
+
+    public override bool CanWrite => true;
+
+    public override long Length => throw new NotSupportedException();
+
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+    public override void Flush()
+    {
+    }
+
+    public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+    public override void SetLength(long value) => throw new NotSupportedException();
+
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+  }
+
+  private sealed class BrokenStream : Stream
+  {
+    public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) => throw new IOException("broken pipe");
+
+    public override bool CanRead => false;
+
+    public override bool CanSeek => false;
+
+    public override bool CanWrite => true;
+
+    public override long Length => throw new NotSupportedException();
+
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+    public override void Flush()
+    {
+    }
+
+    public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+    public override void SetLength(long value) => throw new NotSupportedException();
+
+    public override void Write(byte[] buffer, int offset, int count) => throw new IOException("broken pipe");
+  }
+
   private static async Task<List<string>> ReadAllAsync(NewlineChannel channel, CancellationToken ct)
   {
     var lines = new List<string>();

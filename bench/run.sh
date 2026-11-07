@@ -15,7 +15,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 mkdir -p "$OUT/bin"
-REF_VERSION="$(sed -n 's/.*Include="ModelContextProtocol" Version="\([^"]*\)".*/\1/p' "$HERE/Directory.Packages.props" | head -1)"
+REF_VERSION="$(sed -n 's/.*Include="ModelContextProtocol" Version="\([^"]*\)".*/\1/p' "$HERE/../Directory.Packages.props" | head -1)"
 P="$HERE/Ours/RecursiveAI.OneModelContext.Bench.Ours.csproj"
 R="$HERE/Reference/RecursiveAI.OneModelContext.Bench.Reference.csproj"
 D="$HERE/Driver/RecursiveAI.OneModelContext.Bench.Driver.csproj"

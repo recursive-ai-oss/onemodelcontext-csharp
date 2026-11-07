@@ -30,7 +30,7 @@ namespace RecursiveAI.OneModelContext.Transports;
 /// compatibility); 2025-11-25, 2025-06-18 and 2025-03-26 basic/transports (sessions, the GET stream, resumability, backwards
 /// compatibility); 2024-11-05 basic/transports (HTTP with SSE); the W3C Server-Sent Events specification.
 /// </remarks>
-internal sealed class HttpChannel : IJsonRpcChannel
+internal sealed class HttpChannel : IJsonRpcChannel, IConcurrentWriteChannel
 {
   // JSON-RPC reserves -32000 to -32099 for the implementation. The data member marks errors that come from HTTP, not from the server's
   // protocol layer, so the client can raise them as transport errors.
@@ -44,7 +44,8 @@ internal sealed class HttpChannel : IJsonRpcChannel
   private readonly Channel<Inbound> _inbound;
   private readonly CancellationTokenSource _lifetime = new();
   private readonly ConcurrentDictionary<JsonRpcId, Call> _calls = new();
-  private readonly ConcurrentDictionary<Task, byte> _tasks = new();
+  private readonly TaskCompletionSource _idle = new(TaskCreationOptions.RunContinuationsAsynchronously);
+  private int _running;
   private readonly ConcurrentDictionary<string, HeaderParameter[]> _toolHeaders = new(StringComparer.Ordinal);
   private readonly SemaphoreSlim _modeGate = new(1, 1);
   private byte[]? _lastRead;
@@ -139,14 +140,14 @@ internal sealed class HttpChannel : IJsonRpcChannel
       case MessageKind.Request:
         var call = NewCall(body, shape);
         _calls[call.Id] = call;
-        Run(() => RunCallAsync(call));
+        StartCall(call);
         break;
       case MessageKind.Notification when shape.Method == Methods.NotificationsCancelled:
         Cancel(body, shape);
         break;
       case MessageKind.Notification or MessageKind.Response or MessageKind.Batch:
         var other = NewCall(body, shape);
-        Run(() => RunCallAsync(other));
+        StartCall(other);
         break;
       default:
         throw new IOException("The message is not a JSON-RPC request, notification or response.");
@@ -165,12 +166,11 @@ internal sealed class HttpChannel : IJsonRpcChannel
     try
     {
       await _lifetime.CancelAsync().ConfigureAwait(false);
-      var running = new List<Task>(_tasks.Keys);
-      if (running.Count > 0)
+      if (Volatile.Read(ref _running) != 0)
       {
         try
         {
-          await Task.WhenAll(running).WaitAsync(TimeSpan.FromSeconds(3), _options.TimeProvider).ConfigureAwait(false);
+          await _idle.Task.WaitAsync(TimeSpan.FromSeconds(3), _options.TimeProvider).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
         {
@@ -210,26 +210,23 @@ internal sealed class HttpChannel : IJsonRpcChannel
     // 2026-07-28 requests carry the version in params._meta; that is what makes a message modern (the headers mirror it).
     try
     {
-      using var document = JsonDocument.Parse(body);
-      if (document.RootElement.TryGetProperty("params", out var parameters) && parameters.ValueKind == JsonValueKind.Object)
+      var wantsHeaders = shape.Method == Methods.ToolsCall && !_toolHeaders.IsEmpty;
+      var scan = ScanParams(body);
+      call.ModernVersion = scan.Version;
+      if (call.ModernVersion is not null)
       {
-        if (parameters.TryGetProperty("_meta", out var meta) && meta.ValueKind == JsonValueKind.Object
-          && meta.TryGetProperty(WireNames.MetaProtocolVersion, out var version) && version.ValueKind == JsonValueKind.String)
+        call.Name = shape.Method switch
         {
-          call.ModernVersion = version.GetString();
-        }
+          Methods.ToolsCall or Methods.PromptsGet => scan.Name,
+          Methods.ResourcesRead => scan.Uri,
+          _ when shape.Method is { } taskMethod && Extensions.Tasks.TasksExtension.IsTaskMethod(taskMethod) => scan.TaskId,
+          _ => null,
+        };
 
-        if (call.ModernVersion is not null)
+        if (wantsHeaders && call.Name is not null && _toolHeaders.TryGetValue(call.Name, out var mirrored))
         {
-          call.Name = shape.Method switch
-          {
-            Methods.ToolsCall or Methods.PromptsGet => StringMember(parameters, "name"),
-            Methods.ResourcesRead => StringMember(parameters, "uri"),
-            _ when shape.Method is { } taskMethod && Extensions.Tasks.TasksExtension.IsTaskMethod(taskMethod) => StringMember(parameters, "taskId"),
-            _ => null,
-          };
-
-          if (shape.Method == Methods.ToolsCall && call.Name is not null && _toolHeaders.TryGetValue(call.Name, out var mirrored)
+          using var document = JsonDocument.Parse(body);
+          if (document.RootElement.TryGetProperty("params", out var parameters) && parameters.ValueKind == JsonValueKind.Object
             && parameters.TryGetProperty("arguments", out var arguments))
           {
             foreach (var parameter in mirrored)
@@ -251,14 +248,123 @@ internal sealed class HttpChannel : IJsonRpcChannel
     return call;
   }
 
-  private static string? StringMember(JsonElement parameters, string name) =>
-    parameters.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+  private readonly record struct ParamsScan(string? Version, string? Name, string? Uri, string? TaskId);
 
+  // Reads the few params members a transport needs (the _meta version and the name, uri or taskId that the headers mirror) with a
+  // forward-only reader, so no document is built for every message.
+  private static ParamsScan ScanParams(ReadOnlySpan<byte> utf8)
+  {
+    string? version = null, name = null, uri = null, taskId = null;
+    var reader = new Utf8JsonReader(utf8, isFinalBlock: true, new JsonReaderState(new JsonReaderOptions { MaxDepth = 64 }));
+    if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+    {
+      return default;
+    }
+
+    while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+    {
+      var isParams = reader.ValueTextEquals("params"u8);
+      reader.Read();
+      if (!isParams || reader.TokenType != JsonTokenType.StartObject)
+      {
+        if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+        {
+          reader.Skip();
+        }
+
+        continue;
+      }
+
+      while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+      {
+        var isMeta = reader.ValueTextEquals("_meta"u8);
+        var isName = reader.ValueTextEquals("name"u8);
+        var isUri = reader.ValueTextEquals("uri"u8);
+        var isTask = reader.ValueTextEquals("taskId"u8);
+        reader.Read();
+        if (isMeta && reader.TokenType == JsonTokenType.StartObject)
+        {
+          while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+          {
+            var isVersion = reader.ValueTextEquals(WireNames.MetaProtocolVersion);
+            reader.Read();
+            if (isVersion && reader.TokenType == JsonTokenType.String)
+            {
+              version = reader.GetString();
+            }
+            else if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+            {
+              reader.Skip();
+            }
+          }
+        }
+        else if (reader.TokenType == JsonTokenType.String && (isName || isUri || isTask))
+        {
+          var text = reader.GetString();
+          if (isName)
+          {
+            name = text;
+          }
+          else if (isUri)
+          {
+            uri = text;
+          }
+          else
+          {
+            taskId = text;
+          }
+        }
+        else if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+        {
+          reader.Skip();
+        }
+      }
+    }
+
+    return new ParamsScan(version, name, uri, taskId);
+  }
+
+  // Starts one request on the caller's thread and returns when it first has to wait (for the network). Sends from several threads are
+  // independent exchanges, so there is no reason to hop to the pool first. Dispose waits for the count to reach zero.
+  private void StartCall(Call call)
+  {
+    Interlocked.Increment(ref _running);
+    _ = RunTrackedAsync(call);
+  }
+
+  private async Task RunTrackedAsync(Call call)
+  {
+    try
+    {
+      await RunCallAsync(call).ConfigureAwait(false);
+    }
+    finally
+    {
+      if (Interlocked.Decrement(ref _running) == 0 && Volatile.Read(ref _disposed) != 0)
+      {
+        _idle.TrySetResult();
+      }
+    }
+  }
+
+  // Background work of the channel: the listening stream and the HTTP+SSE session and the listening stream. Dispose waits for the count to reach zero.
   private void Run(Func<Task> work)
   {
-    var task = Task.Run(work);
-    _tasks[task] = 0;
-    _ = task.ContinueWith(static (t, state) => ((ConcurrentDictionary<Task, byte>)state!).TryRemove(t, out _), _tasks, TaskScheduler.Default);
+    Interlocked.Increment(ref _running);
+    _ = Task.Run(async () =>
+    {
+      try
+      {
+        await work().ConfigureAwait(false);
+      }
+      finally
+      {
+        if (Interlocked.Decrement(ref _running) == 0 && Volatile.Read(ref _disposed) != 0)
+        {
+          _idle.TrySetResult();
+        }
+      }
+    });
   }
 
   private async Task RunCallAsync(Call call)
@@ -398,14 +504,22 @@ internal sealed class HttpChannel : IJsonRpcChannel
     var mediaType = response.Content.Headers.ContentType?.MediaType;
     if (status == 200 && string.Equals(mediaType, "application/json", StringComparison.OrdinalIgnoreCase))
     {
-      var body = await ReadBoundedAsync(response.Content, _options.MaxResponseBodyBytes, ct).ConfigureAwait(false);
+      var (body, length) = await ReadBodyAsync(response.Content, _options.MaxResponseBodyBytes, ct).ConfigureAwait(false);
       if (body is null)
       {
         await FailAsync(call, "The server's response is larger than " + _options.MaxResponseBodyBytes + " bytes.", null, null, ct).ConfigureAwait(false);
         return Outcome.Done;
       }
 
-      await DeliverAsync(call, body, ct).ConfigureAwait(false);
+      try
+      {
+        await DeliverAsync(call, body.AsMemory(0, length), ct).ConfigureAwait(false);
+      }
+      finally
+      {
+        ArrayPool<byte>.Shared.Return(body, clearArray: true);
+      }
+
       return Outcome.Done;
     }
 
@@ -650,7 +764,7 @@ internal sealed class HttpChannel : IJsonRpcChannel
     }
 
     var notification = NewCall(body, shape);
-    Run(() => RunCallAsync(notification));
+    StartCall(notification);
   }
 
   // ---- event streams -----------------------------------------------------------------------------------------------------------
@@ -1086,6 +1200,64 @@ internal sealed class HttpChannel : IJsonRpcChannel
   }
 
   // ---- helpers ---------------------------------------------------------------------------------------------------------------
+
+  // Reads a whole body up to a bound into a pooled buffer the caller returns. A null buffer means the body is larger than the bound.
+  private static async Task<(byte[]? Buffer, int Length)> ReadBodyAsync(HttpContent content, int limit, CancellationToken ct)
+  {
+    var stream = await content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+    var announced = content.Headers.ContentLength;
+    var rented = ArrayPool<byte>.Shared.Rent(announced is > 0 and <= 16 * 1024 ? (int)announced.Value + 1 : Math.Min(limit + 1, 16 * 1024));
+    var length = 0;
+    try
+    {
+      while (true)
+      {
+        if (length == rented.Length)
+        {
+          if (length > limit)
+          {
+            ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+            return (null, 0);
+          }
+
+          var bigger = ArrayPool<byte>.Shared.Rent((int)Math.Min((long)rented.Length * 2, (long)limit + 1));
+          Buffer.BlockCopy(rented, 0, bigger, 0, length);
+          ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+          rented = bigger;
+        }
+
+        var room = Math.Min(rented.Length, limit + 1) - length;
+        if (room <= 0)
+        {
+          ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+          return (null, 0);
+        }
+
+        int read;
+        try
+        {
+          read = await stream.ReadAsync(rented.AsMemory(length, room), ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or HttpRequestException)
+        {
+          ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+          return (null, 0);
+        }
+
+        if (read == 0)
+        {
+          return (rented, length);
+        }
+
+        length += read;
+      }
+    }
+    catch
+    {
+      ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+      throw;
+    }
+  }
 
   // Reads a body up to a bound. Returns null when it is larger (or the truncated bytes with truncate).
   private static async Task<byte[]?> ReadBoundedAsync(HttpContent content, int limit, CancellationToken ct, bool truncate = false)
