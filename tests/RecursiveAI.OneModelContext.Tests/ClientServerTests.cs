@@ -362,15 +362,16 @@ public class DiagnosticsTests
   [Fact]
   public async Task Requests_produce_activities_and_a_duration_metric_when_something_listens()
   {
-    var activities = new List<System.Diagnostics.Activity>();
+    // The listeners are process-wide, so requests from tests running in parallel arrive here too, on other threads.
+    var activities = new System.Collections.Concurrent.ConcurrentQueue<System.Diagnostics.Activity>();
     using var activityListener = new System.Diagnostics.ActivityListener
     {
       ShouldListenTo = source => source.Name == "RecursiveAI.OneModelContext",
       Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) => System.Diagnostics.ActivitySamplingResult.AllData,
-      ActivityStopped = activities.Add,
+      ActivityStopped = activities.Enqueue,
     };
     System.Diagnostics.ActivitySource.AddActivityListener(activityListener);
-    var measurements = new List<string>();
+    var measurements = new System.Collections.Concurrent.ConcurrentQueue<string>();
     using var meterListener = new System.Diagnostics.Metrics.MeterListener();
     meterListener.InstrumentPublished = (instrument, listener) =>
     {
@@ -385,7 +386,7 @@ public class DiagnosticsTests
       {
         if (tag.Key == "mcp.method.name")
         {
-          measurements.Add(instrument.Name + ":" + tag.Value);
+          measurements.Enqueue(instrument.Name + ":" + tag.Value);
         }
       }
     });

@@ -15,6 +15,7 @@ internal sealed class ServerConnection : IServerSink, IAsyncDisposable
   private readonly ContextServer _server;
   private readonly JsonRpcConnection _rpc;
   private readonly ServerSessionState _session = new();
+  private readonly IDisposable _attachment;
 
   internal ServerConnection(ContextServer server, IJsonRpcChannel channel)
   {
@@ -29,6 +30,7 @@ internal sealed class ServerConnection : IServerSink, IAsyncDisposable
       ReaderOptions = server.Options.ReaderOptions,
       TimeProvider = server.Options.TimeProvider,
     });
+    _attachment = server.Attach(_session, this);
   }
 
   internal Task<JsonRpcCloseReason> RunAsync(CancellationToken cancellationToken) => _rpc.RunAsync(cancellationToken);
@@ -39,7 +41,11 @@ internal sealed class ServerConnection : IServerSink, IAsyncDisposable
   public ValueTask<JsonElement> SendRequestAsync(string method, JsonElement parameters, CancellationToken cancellationToken) =>
     _rpc.SendRequestAsync(method, parameters, cancellationToken);
 
-  public ValueTask DisposeAsync() => _rpc.DisposeAsync();
+  public ValueTask DisposeAsync()
+  {
+    _attachment.Dispose();
+    return _rpc.DisposeAsync();
+  }
 
   private async ValueTask<JsonRpcMessage?> HandleRequestAsync(JsonRpcRequest request, CancellationToken cancellationToken)
   {

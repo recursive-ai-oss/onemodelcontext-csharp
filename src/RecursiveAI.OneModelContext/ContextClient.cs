@@ -88,7 +88,7 @@ public sealed class ContextClientOptions
 /// A client connected to one server. The calls are the same on both eras; <see cref="Era"/> and <see cref="ProtocolVersion"/> say
 /// which one was negotiated. Thread-safe: calls may run concurrently.
 /// </summary>
-public sealed class ContextClient : IAsyncDisposable
+public sealed partial class ContextClient : IAsyncDisposable
 {
   private readonly JsonRpcConnection _rpc;
   private readonly ClientSession _session;
@@ -440,6 +440,12 @@ public sealed class ContextClient : IAsyncDisposable
   // Server-initiated requests (legacy sampling, roots and elicitation) go to the handler the application supplied.
   private async ValueTask<JsonRpcMessage?> HandleServerRequestAsync(JsonRpcRequest request, CancellationToken cancellationToken)
   {
+    if (request.Method == Methods.Ping && Era == ProtocolEra.Legacy)
+    {
+      // utilities/ping: either side may ping, and the receiver answers at once with an empty result.
+      return new JsonRpcResultResponse(request.Id, ContextServer.EmptyObject);
+    }
+
     if (_options.RequestHandler is not { } handler)
     {
       return new JsonRpcErrorResponse(request.Id, new JsonRpcError(JsonRpcErrorCodes.MethodNotFound, "Method not found: " + request.Method + "."));
