@@ -39,6 +39,9 @@ internal sealed class TestExchange : IHttpExchange, IDisposable
 
   public ClaimsPrincipal? User { get; init; }
 
+  /// <summary>The request path; <c>/mcp</c> unless a test says otherwise.</summary>
+  internal string Path { init => _request.Path = value; }
+
   public CancellationToken Aborted => _abort.Token;
 
   internal int Status => _response.StatusCode;
@@ -94,7 +97,7 @@ internal sealed class TestExchange : IHttpExchange, IDisposable
   {
     public string Method { get; } = method;
 
-    public string Path => "/mcp";
+    public string Path { get; set; } = "/mcp";
 
     public HttpHeaders Headers { get; } = new();
 
