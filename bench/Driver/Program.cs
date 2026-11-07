@@ -236,7 +236,7 @@ internal static class Program
   private static int Int(JsonElement e, string name) => e.GetProperty(name).GetInt32();
 
   private static string Alloc(JsonElement ours, JsonElement theirs) =>
-    $"alloc/call client {Num(ours, "clientAllocBytesPerCall"):F0} B, server {Num(ours, "serverAllocBytesPerCall"):F0} B; peak MiB client {Num(ours, "clientPeakMb"):F0}, server {Num(ours, "serverPeakMb"):F0}";
+    $"alloc/call client {Num(ours, "clientAllocBytesPerCall"):F0} B, server {Num(ours, "serverAllocBytesPerCall"):F0} B; cpu/call under load client {Num(ours, "clientCpuUsPerCall"):F1} us, server {Num(ours, "serverCpuUsPerCall"):F1} us; peak MiB client {Num(ours, "clientPeakMb"):F0}, server {Num(ours, "serverPeakMb"):F0}";
 
   private static double Load()
   {

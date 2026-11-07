@@ -44,7 +44,7 @@ internal static class ClientMain
       await call().ConfigureAwait(false);
     }
 
-    var (allocBefore, _) = ParseStats(await client.TextAsync("bench_stats").ConfigureAwait(false));
+    var (allocBefore, _, _) = ParseStats(await client.TextAsync("bench_stats").ConfigureAwait(false));
     var clientBefore = GC.GetTotalAllocatedBytes(false);
     var ticks = new long[seq];
     for (var i = 0; i < seq; i++)
@@ -55,15 +55,22 @@ internal static class ClientMain
     }
 
     var clientAlloc = GC.GetTotalAllocatedBytes(false) - clientBefore;
-    var (allocAfter, _) = ParseStats(await client.TextAsync("bench_stats").ConfigureAwait(false));
+    var (allocAfter, _, _) = ParseStats(await client.TextAsync("bench_stats").ConfigureAwait(false));
     Array.Sort(ticks);
     double ToMicros(long t) => t * 1_000_000.0 / Stopwatch.Frequency;
     var p50 = ToMicros(ticks[seq / 2]);
     var p90 = ToMicros(ticks[(int)(seq * 0.9)]);
 
     double perSecond = 0;
+    long loadedCalls = 0;
+    long serverCpuBefore = 0;
+    var clientCpuBefore = 0.0;
+    using var self = Process.GetCurrentProcess();
     if (seconds > 0)
     {
+      serverCpuBefore = ParseStats(await client.TextAsync("bench_stats").ConfigureAwait(false)).CpuUs;
+      self.Refresh();
+      clientCpuBefore = self.TotalProcessorTime.TotalMilliseconds * 1000;
       var stop = Stopwatch.GetTimestamp() + (long)(seconds * Stopwatch.Frequency);
       var started = Stopwatch.GetTimestamp();
       long total = 0;
@@ -79,10 +86,14 @@ internal static class ClientMain
         Interlocked.Add(ref total, n);
       }).ToArray();
       await Task.WhenAll(workers).ConfigureAwait(false);
+      loadedCalls = total;
       perSecond = total / ((Stopwatch.GetTimestamp() - started) / (double)Stopwatch.Frequency);
     }
 
-    var (_, serverPeak) = ParseStats(await client.TextAsync("bench_stats").ConfigureAwait(false));
+    var (_, serverPeak, serverCpuAfter) = ParseStats(await client.TextAsync("bench_stats").ConfigureAwait(false));
+    self.Refresh();
+    var clientCpuPerCall = loadedCalls == 0 ? 0 : (self.TotalProcessorTime.TotalMilliseconds * 1000 - clientCpuBefore) / loadedCalls;
+    var serverCpuPerCall = loadedCalls == 0 ? 0 : (double)(serverCpuAfter - serverCpuBefore) / loadedCalls;
     using var me = Process.GetCurrentProcess();
     var inv = CultureInfo.InvariantCulture;
     var json = new StringBuilder()
@@ -94,6 +105,8 @@ internal static class ClientMain
       .Append(",\"callsPerSec\":").Append(perSecond.ToString("F1", inv))
       .Append(",\"clientAllocBytesPerCall\":").Append((clientAlloc / seq).ToString(inv))
       .Append(",\"serverAllocBytesPerCall\":").Append(((allocAfter - allocBefore) / seq).ToString(inv))
+      .Append(",\"clientCpuUsPerCall\":").Append(clientCpuPerCall.ToString("F1", inv))
+      .Append(",\"serverCpuUsPerCall\":").Append(serverCpuPerCall.ToString("F1", inv))
       .Append(",\"clientPeakMb\":").Append((me.PeakWorkingSet64 / 1048576.0).ToString("F1", inv))
       .Append(",\"serverPeakMb\":").Append((serverPeak / 1048576.0).ToString("F1", inv))
       .Append('}');
@@ -101,10 +114,10 @@ internal static class ClientMain
     return 0;
   }
 
-  private static (long Alloc, long PeakWs) ParseStats(string text)
+  private static (long Alloc, long PeakWs, long CpuUs) ParseStats(string text)
   {
     var parts = text.Split(' ');
-    return (long.Parse(parts[0], CultureInfo.InvariantCulture), long.Parse(parts[1], CultureInfo.InvariantCulture));
+    return (long.Parse(parts[0], CultureInfo.InvariantCulture), long.Parse(parts[1], CultureInfo.InvariantCulture), long.Parse(parts[2], CultureInfo.InvariantCulture));
   }
 
   public static string? Arg(string[] args, string name)
