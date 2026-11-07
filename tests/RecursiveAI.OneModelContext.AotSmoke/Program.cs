@@ -53,7 +53,7 @@ using (var key = ECDsa.Create(ECCurve.NamedCurves.nistP256))
 using (var oauth = new OAuthClient(new OAuthClientOptions(new Uri("https://example.com/mcp"))
 {
   UserAgent = receiver,
-  ClientCredentials = new ClientCredentialsGrant("smoke", key),
+  ClientCredentials = new ClientCredentialsGrant("smoke", key) { ExpectedIssuer = "https://auth.example" },
   Store = new MemoryTokenStore(),
 }))
 {

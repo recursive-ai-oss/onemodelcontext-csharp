@@ -21,6 +21,8 @@ namespace RecursiveAI.OneModelContext.OAuth;
 public sealed class OAuthHttpHandler : DelegatingHandler
 {
   private readonly OAuthClient _client;
+  private readonly object _stepUpLock = new();
+  private DateTimeOffset? _lastScopelessStepUp;
 
   /// <summary>Creates the handler.</summary>
   /// <param name="client">The OAuth client that holds the tokens. It is not disposed with the handler.</param>
@@ -31,7 +33,7 @@ public sealed class OAuthHttpHandler : DelegatingHandler
   {
     ArgumentNullException.ThrowIfNull(client);
     // A redirect would carry the bearer token to wherever the server points, so it is refused outright.
-    if (InnerHandler is SocketsHttpHandler { AllowAutoRedirect: true } or HttpClientHandler { AllowAutoRedirect: true })
+    if (RedirectPolicy.Follows(InnerHandler!) == true)
     {
       throw new ArgumentException("The inner handler follows redirects, which would carry the access token to other hosts. Set AllowAutoRedirect to false.", nameof(innerHandler));
     }
@@ -71,7 +73,7 @@ public sealed class OAuthHttpHandler : DelegatingHandler
         return response;
       }
 
-      if (authorizations >= _client.Options.MaxAuthorizationAttempts || (stepUp && await AlreadyAskedForAsync(challenge, cancellationToken).ConfigureAwait(false)))
+      if (authorizations >= _client.Options.MaxAuthorizationAttempts || (stepUp && await AlreadyAskedForAsync(challenge, authorizations, cancellationToken).ConfigureAwait(false)))
       {
         // Retry limit (2026-07-28 authorization, Step-Up Authorization Flow): a repeated refusal is permanent.
         return response;
@@ -84,11 +86,14 @@ public sealed class OAuthHttpHandler : DelegatingHandler
   }
 
   // A step-up that asks for nothing new cannot succeed by asking again.
-  private async Task<bool> AlreadyAskedForAsync(BearerChallenge? challenge, CancellationToken cancellationToken)
+  private async Task<bool> AlreadyAskedForAsync(BearerChallenge? challenge, int authorizations, CancellationToken cancellationToken)
   {
     if (challenge?.Scope is not { } wanted)
     {
-      return false;
+      // insufficient_scope without a scope names nothing to ask for. A token obtained moments ago for this very request and refused the
+      // same way cannot be improved by asking again, and a server that answers every request like this must not make every request
+      // open a browser: one such authorization per StepUpCooldown.
+      return !TryStartScopelessStepUp(authorizations);
     }
 
     var asked = (await _client.GetRequestedScopeAsync(cancellationToken).ConfigureAwait(false) ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -101,6 +106,26 @@ public sealed class OAuthHttpHandler : DelegatingHandler
     }
 
     return true;
+  }
+
+  private bool TryStartScopelessStepUp(int authorizationsThisRequest)
+  {
+    if (authorizationsThisRequest > 0)
+    {
+      return false;
+    }
+
+    var now = (_client.Options.TimeProvider ?? TimeProvider.System).GetUtcNow();
+    lock (_stepUpLock)
+    {
+      if (_lastScopelessStepUp is { } last && now - last < _client.Options.StepUpCooldown)
+      {
+        return false;
+      }
+
+      _lastScopelessStepUp = now;
+      return true;
+    }
   }
 
   private static BearerChallenge? Pick(IReadOnlyList<BearerChallenge> challenges) => challenges.Count == 0 ? null : challenges[0];
@@ -135,5 +160,36 @@ public sealed class OAuthHttpHandler : DelegatingHandler
     }
 
     return clone;
+  }
+}
+
+/// <summary>Finds out whether a handler chain follows redirects, looking under <see cref="DelegatingHandler"/>s.</summary>
+internal static class RedirectPolicy
+{
+  /// <summary>True when the chain follows redirects, false when it provably does not, null when its last handler is not one that can be checked.</summary>
+  internal static bool? Follows(HttpMessageHandler handler)
+  {
+    while (handler is DelegatingHandler { InnerHandler: { } inner })
+    {
+      handler = inner;
+    }
+
+    return handler switch
+    {
+      SocketsHttpHandler sockets => sockets.AllowAutoRedirect,
+      HttpClientHandler client => client.AllowAutoRedirect,
+      _ => null,
+    };
+  }
+
+  internal static void Require(HttpMessageHandler handler, string parameter)
+  {
+    switch (Follows(handler))
+    {
+      case true:
+        throw new ArgumentException("The HTTP handler follows redirects, which would replay token requests (client secret included) at a host the server chose. Set AllowAutoRedirect to false.", parameter);
+      case null:
+        throw new ArgumentException("The HTTP handler's redirect behaviour cannot be checked. End the chain in a SocketsHttpHandler or HttpClientHandler with AllowAutoRedirect set to false.", parameter);
+    }
   }
 }

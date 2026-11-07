@@ -41,7 +41,7 @@ internal sealed partial class CliApp(TextWriter output, TextWriter error, TextRe
       onemodelcontext call <server> <tool> [--arg k=v]... [--json @file | --args '{...}']
       onemodelcontext read <server> <uri>
       onemodelcontext prompt <server> <name> [--arg k=v]...
-      onemodelcontext login <url> [--client-id ID|https-metadata-url] [--client-secret S|@file] [--no-browser] [--redirect-port P]
+      onemodelcontext login <url> [--client-id ID|https-metadata-url] [--client-secret env:NAME|-|@file] [--issuer URL] [--no-browser] [--redirect-port P]
       onemodelcontext logout <url>
       onemodelcontext proxy <server> [--listen [host:]port] [--token T] [--allow-non-loopback] [--allow-origin O]... [--allow-host H]... [--path /mcp]
 
@@ -52,7 +52,10 @@ internal sealed partial class CliApp(TextWriter output, TextWriter error, TextRe
     login signs in to an http(s) server with OAuth 2.1 (PKCE) through a browser and a loopback redirect, and keeps the tokens in
     the per-user onemodelcontext/tokens.json (--token-store FILE; owner-only permissions). The other commands then use, refresh and
     widen them by themselves. logout forgets them. --client-id with an https URL names a client ID metadata document; otherwise it is a
-    pre-registered client id (without it the server's dynamic registration is tried).
+    pre-registered client id (without it the server's dynamic registration is tried). A client secret is sent only to the
+    authorization server named by --issuer (required with a secret), never to one the server's metadata names. Give the secret as
+    env:NAME (an environment variable), - (first line of standard input) or @file, or in ONEMODELCONTEXT_CLIENT_SECRET; a
+    literal on the command line is visible to other users of the machine in the process list.
 
     <server> is a command line ("npx -y some-server"), an http(s) URL, or a name in the config file.
     The config file is --config, ./onemodelcontext.json or the per-user onemodelcontext/config.json:
