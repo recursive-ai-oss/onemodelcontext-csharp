@@ -145,6 +145,55 @@ public class ClientCallbackTests
     await stop();
   }
 
+  [Theory]
+  [MemberData(nameof(Eras))]
+  public async Task The_happy_path_connect_takes_the_callbacks(EraPreference era)
+  {
+    var server = ServerWithAsks();
+    var (a, b) = PipeEnd.CreatePair();
+    var serving = server.RunAsync(ContextTransport.Stream(a), TestContext.Current.CancellationToken);
+    await using (var client = await ModelContext.ConnectAsync(
+      ContextTransport.Stream(b),
+      era,
+      onConfirm: (_, _) => ValueTask.FromResult(true),
+      onElicit: (_, _) => ValueTask.FromResult(ElicitResult.Accept(new Dictionary<string, JsonElement> { ["name"] = Json.Parse("\"Ada\"") })),
+      onSample: (_, _) => ValueTask.FromResult(new CreateMessageResult { Role = "assistant", Model = "m", Content = [TextContent.Of("sampled")] }),
+      onListRoots: _ => ValueTask.FromResult(new ListRootsResult { Roots = [new Root { Uri = "file:///r" }] }),
+      cancellationToken: TestContext.Current.CancellationToken))
+    {
+      Assert.Equal("yes", (await client.CallToolAsync("confirm", cancellationToken: TestContext.Current.CancellationToken)).Text);
+      Assert.Equal("accept:Ada", (await client.CallToolAsync("form", cancellationToken: TestContext.Current.CancellationToken)).Text);
+      Assert.Equal("sampled", (await client.CallToolAsync("sample", cancellationToken: TestContext.Current.CancellationToken)).Text);
+      Assert.Equal("file:///r", (await client.CallToolAsync("roots", cancellationToken: TestContext.Current.CancellationToken)).Text);
+    }
+
+    await serving.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+  }
+
+  [Fact]
+  public async Task Full_listings_say_whether_they_came_from_the_cache()
+  {
+    var server = new ContextServer("c", "1", new ContextServerOptions { ListCacheTtl = TimeSpan.FromMinutes(5) });
+    server.Tools.Add(new ToolDefinition("t", null, ObjectSchema), (_, _) => ValueTask.FromResult(CallToolResult.FromText("")));
+    server.Resources.Add(new ResourceDefinition("mem://a", "a"), (uri, _) => ValueTask.FromResult(new ReadResourceResult { Contents = [new TextResourceContents { Uri = uri, Text = "A" }] }));
+    server.ResourceTemplates.Add(new ResourceTemplateDefinition("mem://{x}", "x"), (uri, _) => ValueTask.FromResult(new ReadResourceResult { Contents = [new TextResourceContents { Uri = uri, Text = "X" }] }));
+    server.Prompts.Add(new PromptDefinition("p"), (_, _) => ValueTask.FromResult(new GetPromptResult { Messages = [new PromptMessage { Role = "user", Content = TextContent.Of("hi") }] }));
+    var (client, stop) = await ConnectAsync(server, new ContextClientOptions { Era = EraPreference.Modern });
+    var token = TestContext.Current.CancellationToken;
+
+    Assert.False((await client.ListToolsAsync(token)).FromCache);
+    var tools = await client.ListToolsAsync(token);
+    Assert.True(tools.FromCache);
+    Assert.Equal("t", Assert.Single(tools).Name);
+    Assert.False((await client.ListResourcesAsync(token)).FromCache);
+    Assert.True((await client.ListResourcesAsync(token)).FromCache);
+    Assert.False((await client.ListResourceTemplatesAsync(token)).FromCache);
+    Assert.True((await client.ListResourceTemplatesAsync(token)).FromCache);
+    Assert.False((await client.ListPromptsAsync(token)).FromCache);
+    Assert.True((await client.ListPromptsAsync(token)).FromCache);
+    await stop();
+  }
+
   [Fact]
   public async Task A_session_handles_whole_messages_on_either_era()
   {

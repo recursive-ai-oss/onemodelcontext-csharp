@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using RecursiveAI.OneModelContext.Protocol;
 
 namespace RecursiveAI.OneModelContext;
 
@@ -72,13 +73,24 @@ public static class ModelContext
   /// <summary>Connects to a server over any transport. The client negotiates the protocol era itself.</summary>
   /// <param name="transport">The transport, for example <see cref="ContextTransport.Stream(System.IO.Stream, int, bool)"/>.</param>
   /// <param name="era">Pin the era when a server is known to need it; <see cref="EraPreference.Auto"/> negotiates.</param>
+  /// <param name="onConfirm">Answers the server's yes/no questions (a tool asking before it acts): receives the question, returns true for yes. Setting it tells the server this client can be asked. See <see cref="ContextClientOptions.OnConfirm"/>.</param>
+  /// <param name="onElicit">Answers the server's other questions to the user (forms, URLs). See <see cref="ContextClientOptions.OnElicit"/>.</param>
+  /// <param name="onSample">Answers requests for a model completion. See <see cref="ContextClientOptions.OnSample"/>.</param>
+  /// <param name="onListRoots">Answers the request for the client's roots. See <see cref="ContextClientOptions.OnListRoots"/>.</param>
   /// <param name="cancellationToken">Cancels the connection attempt.</param>
   /// <returns>The connected client; dispose it to disconnect.</returns>
   /// <exception cref="ProtocolVersionException">The server and client share no protocol revision.</exception>
-  public static async Task<ContextClient> ConnectAsync(ContextTransport transport, EraPreference era = EraPreference.Auto, CancellationToken cancellationToken = default)
+  public static async Task<ContextClient> ConnectAsync(
+    ContextTransport transport,
+    EraPreference era = EraPreference.Auto,
+    Func<string, CancellationToken, ValueTask<bool>>? onConfirm = null,
+    Func<ElicitRequestParams, CancellationToken, ValueTask<ElicitResult>>? onElicit = null,
+    Func<CreateMessageRequestParams, CancellationToken, ValueTask<CreateMessageResult>>? onSample = null,
+    Func<CancellationToken, ValueTask<ListRootsResult>>? onListRoots = null,
+    CancellationToken cancellationToken = default)
   {
     ArgumentNullException.ThrowIfNull(transport);
-    return await ContextClient.ConnectAsync(transport, new ContextClientOptions { Era = era }, cancellationToken).ConfigureAwait(false);
+    return await ContextClient.ConnectAsync(transport, new ContextClientOptions { Era = era, OnConfirm = onConfirm, OnElicit = onElicit, OnSample = onSample, OnListRoots = onListRoots }, cancellationToken).ConfigureAwait(false);
   }
 
   /// <summary>Connects to a server named by a command line and negotiates the protocol era (or uses the one you pin).</summary>
@@ -87,12 +99,23 @@ public static class ModelContext
   /// (see <see cref="ContextTransport.ProcessFromCommandLine"/>: no shell runs). An <c>http://</c> or <c>https://</c> URL is not supported yet.
   /// </param>
   /// <param name="era">Pin the era when a server is known to need it; <see cref="EraPreference.Auto"/> negotiates and remembers the answer per server.</param>
+  /// <param name="onConfirm">Answers the server's yes/no questions (a tool asking before it acts): receives the question, returns true for yes. Setting it tells the server this client can be asked. See <see cref="ContextClientOptions.OnConfirm"/>.</param>
+  /// <param name="onElicit">Answers the server's other questions to the user (forms, URLs). See <see cref="ContextClientOptions.OnElicit"/>.</param>
+  /// <param name="onSample">Answers requests for a model completion. See <see cref="ContextClientOptions.OnSample"/>.</param>
+  /// <param name="onListRoots">Answers the request for the client's roots. See <see cref="ContextClientOptions.OnListRoots"/>.</param>
   /// <param name="cancellationToken">Cancels the connection attempt and ends the child process.</param>
   /// <returns>The connected client; dispose it to disconnect and stop the child process.</returns>
   /// <exception cref="ArgumentException"><paramref name="commandOrUrl"/> is empty or has an unclosed quote.</exception>
   /// <exception cref="NotSupportedException"><paramref name="commandOrUrl"/> is an HTTP URL: Streamable HTTP arrives with the HTTP client.</exception>
   /// <exception cref="ProtocolVersionException">The server and client share no protocol revision.</exception>
-  public static Task<ContextClient> ConnectAsync(string commandOrUrl, EraPreference era = EraPreference.Auto, CancellationToken cancellationToken = default)
+  public static Task<ContextClient> ConnectAsync(
+    string commandOrUrl,
+    EraPreference era = EraPreference.Auto,
+    Func<string, CancellationToken, ValueTask<bool>>? onConfirm = null,
+    Func<ElicitRequestParams, CancellationToken, ValueTask<ElicitResult>>? onElicit = null,
+    Func<CreateMessageRequestParams, CancellationToken, ValueTask<CreateMessageResult>>? onSample = null,
+    Func<CancellationToken, ValueTask<ListRootsResult>>? onListRoots = null,
+    CancellationToken cancellationToken = default)
   {
     ArgumentException.ThrowIfNullOrWhiteSpace(commandOrUrl);
     var text = commandOrUrl.Trim();
@@ -101,7 +124,7 @@ public static class ModelContext
       throw new NotSupportedException("Connecting to a URL needs the Streamable HTTP client, which arrives with the HTTP client; only a command line (stdio) is supported now.");
     }
 
-    return ConnectAsync(ContextTransport.ProcessFromCommandLine(text), era, cancellationToken);
+    return ConnectAsync(ContextTransport.ProcessFromCommandLine(text), era, onConfirm, onElicit, onSample, onListRoots, cancellationToken);
   }
 
   private static (string Name, string Version) EntryAssemblyIdentity()
