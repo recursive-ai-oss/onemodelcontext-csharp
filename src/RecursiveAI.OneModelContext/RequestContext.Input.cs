@@ -44,27 +44,6 @@ public sealed partial class RequestContext
     return _sink.SendNotificationAsync(new JsonRpcNotification(Methods.NotificationsElicitationComplete, element), CancellationToken);
   }
 
-  /// <summary>Asks the client's model to generate a message (<c>sampling/createMessage</c>).</summary>
-  /// <param name="request">The conversation and limits.</param>
-  /// <returns>The model's reply.</returns>
-  /// <exception cref="MissingCapabilityException">The client did not declare sampling.</exception>
-  public async ValueTask<CreateMessageResult> SampleAsync(CreateMessageRequestParams request)
-  {
-    ArgumentNullException.ThrowIfNull(request);
-    var element = JsonSerializer.SerializeToElement(request, WireJsonContext.Default.CreateMessageRequestParams);
-    var answer = await _input.RequestInputAsync(Methods.SamplingCreateMessage, element, CancellationToken).ConfigureAwait(false);
-    return Decode(answer, WireJsonContext.Default.CreateMessageResult, "sampling");
-  }
-
-  /// <summary>Asks the client for its filesystem roots (<c>roots/list</c>).</summary>
-  /// <returns>The roots.</returns>
-  /// <exception cref="MissingCapabilityException">The client did not declare roots.</exception>
-  public async ValueTask<ListRootsResult> ListRootsAsync()
-  {
-    var answer = await _input.RequestInputAsync(Methods.RootsList, default, CancellationToken).ConfigureAwait(false);
-    return Decode(answer, WireJsonContext.Default.ListRootsResult, "roots");
-  }
-
   private static T Decode<T>(JsonElement answer, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> info, string what)
     where T : class
   {

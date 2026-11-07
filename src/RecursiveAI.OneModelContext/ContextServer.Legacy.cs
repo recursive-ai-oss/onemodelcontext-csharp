@@ -34,13 +34,15 @@ public sealed partial class ContextServer
 
   /// <summary>
   /// Tells every legacy session subscribed to <paramref name="uri"/> that the resource changed (<c>notifications/resources/updated</c>).
-  /// Sessions that did not subscribe are not told. A peer that cannot be reached is skipped.
+  /// Sessions that did not subscribe are not told. A peer that cannot be reached is skipped. Modern clients hear it on a
+  /// <c>subscriptions/listen</c> stream that asked for this URI in <c>resourceSubscriptions</c>.
   /// </summary>
   /// <param name="uri">The resource that changed.</param>
   /// <param name="cancellationToken">Cancels the sends.</param>
   public async ValueTask NotifyResourceUpdatedAsync(string uri, CancellationToken cancellationToken = default)
   {
     ArgumentNullException.ThrowIfNull(uri);
+    Events.Raise(new ServerEvent(ServerEventKind.ResourceUpdated, uri));
     var element = JsonSerializer.SerializeToElement(new ResourceUpdatedNotificationParams { Uri = uri }, WireJsonContext.Default.ResourceUpdatedNotificationParams);
     var notification = new JsonRpcNotification(Methods.NotificationsResourcesUpdated, element);
     foreach (var (session, sink) in _attached)
@@ -52,12 +54,29 @@ public sealed partial class ContextServer
     }
   }
 
+  // One path for every change: the registries and the Notify* methods raise a server event, and the event hub feeds both the modern
+  // subscriptions/listen streams and, through the forwarder below, the legacy sessions.
   private void HookListChanged()
   {
-    Tools.Changed += (_, _) => _ = BroadcastListChangedAsync(Methods.NotificationsToolsListChanged, static d => d.ToolsListChanged);
-    Resources.Changed += (_, _) => _ = BroadcastListChangedAsync(Methods.NotificationsResourcesListChanged, static d => d.ResourcesListChanged);
-    ResourceTemplates.Changed += (_, _) => _ = BroadcastListChangedAsync(Methods.NotificationsResourcesListChanged, static d => d.ResourcesListChanged);
-    Prompts.Changed += (_, _) => _ = BroadcastListChangedAsync(Methods.NotificationsPromptsListChanged, static d => d.PromptsListChanged);
+    Tools.Changed += (_, _) => Events.Raise(new ServerEvent(ServerEventKind.ToolsListChanged));
+    Prompts.Changed += (_, _) => Events.Raise(new ServerEvent(ServerEventKind.PromptsListChanged));
+    Resources.Changed += (_, _) => Events.Raise(new ServerEvent(ServerEventKind.ResourcesListChanged));
+    ResourceTemplates.Changed += (_, _) => Events.Raise(new ServerEvent(ServerEventKind.ResourcesListChanged));
+    Events.Subscribe(serverEvent =>
+    {
+      switch (serverEvent.Kind)
+      {
+        case ServerEventKind.ToolsListChanged:
+          _ = BroadcastListChangedAsync(Methods.NotificationsToolsListChanged, static d => d.ToolsListChanged);
+          break;
+        case ServerEventKind.PromptsListChanged:
+          _ = BroadcastListChangedAsync(Methods.NotificationsPromptsListChanged, static d => d.PromptsListChanged);
+          break;
+        case ServerEventKind.ResourcesListChanged:
+          _ = BroadcastListChangedAsync(Methods.NotificationsResourcesListChanged, static d => d.ResourcesListChanged);
+          break;
+      }
+    });
   }
 
   // Only sessions that were told at initialize that this list can change get the notification.

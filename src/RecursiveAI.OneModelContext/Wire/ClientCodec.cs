@@ -22,6 +22,12 @@ public sealed class ClientHello
 
   /// <summary>The clock for timeouts.</summary>
   public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+
+  /// <summary>
+  /// The revisions a server named while codecs probed it (in a discovery result or a version error), so that when no codec can use the server
+  /// the error can name what both sides speak. Codecs add to it; it is not part of what the client offers.
+  /// </summary>
+  internal List<string> ServerVersionsSeen { get; } = [];
 }
 
 /// <summary>The outcome of negotiation: what the client and server agreed on, and the codec that carries it.</summary>
