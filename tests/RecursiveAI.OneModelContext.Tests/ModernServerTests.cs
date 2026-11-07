@@ -684,6 +684,8 @@ public class ModernServerTests
   [Fact]
   public async Task The_request_span_joins_the_callers_trace()
   {
+    // The listener sees every test running in parallel; a tool name of its own keeps the span count to this test's calls.
+    var tool = "span-" + Guid.NewGuid().ToString("N");
     var started = new List<System.Diagnostics.Activity>();
     using var listener = new System.Diagnostics.ActivityListener
     {
@@ -693,16 +695,16 @@ public class ModernServerTests
     };
     System.Diagnostics.ActivitySource.AddActivityListener(listener);
     var server = NewServer();
-    server.Tools.Add(new ToolDefinition("t", "d", ObjectSchema), (_, _) => ValueTask.FromResult(CallToolResult.FromText("ok")));
+    server.Tools.Add(new ToolDefinition(tool, "d", ObjectSchema), (_, _) => ValueTask.FromResult(CallToolResult.FromText("ok")));
     var wire = new ModernWire(server);
 
-    await wire.SendAsync("tools/call", """{"name":"t"}""", extraMeta: """{"traceparent":"00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01"}""");
-    await wire.SendAsync("tools/call", """{"name":"t"}""", extraMeta: """{"traceparent":"garbage"}""");
+    await wire.SendAsync("tools/call", "{\"name\":\"" + tool + "\"}", extraMeta: """{"traceparent":"00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01"}""");
+    await wire.SendAsync("tools/call", "{\"name\":\"" + tool + "\"}", extraMeta: """{"traceparent":"garbage"}""");
 
     System.Diagnostics.Activity[] spans;
     lock (started)
     {
-      spans = started.Where(a => a.OperationName == "tools/call t").ToArray();
+      spans = started.Where(a => a.OperationName == "tools/call " + tool).ToArray();
     }
 
     Assert.Equal(2, spans.Length);
