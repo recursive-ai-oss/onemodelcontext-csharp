@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using RecursiveAI.OneModelContext;
+using RecursiveAI.OneModelContext.Extensions.Skills;
 using RecursiveAI.OneModelContext.OAuth;
 using RecursiveAI.OneModelContext.Protocol;
 using RecursiveAI.OneModelContext.Wire;
@@ -26,6 +27,7 @@ var options = new ContextClientOptions
 {
   Capabilities = new ClientCapabilities { Elicitation = new ElicitationCapability() },
   RequestHandler = new Answers(),
+  Extensions = [SkillsExtension.Client()],
   EraCache = null,
   SupportedVersions = string.IsNullOrEmpty(version) ? ProtocolVersions.Supported : [version],
 };
@@ -89,6 +91,13 @@ if (scenario == "listen")
   }
 
   return seen.Contains(SubscriptionEventKind.ToolsListChanged) && seen.Contains(SubscriptionEventKind.PromptsListChanged) ? 0 : 1;
+}
+
+// The Skills extension scenarios watch how a host handles a skill: list, then load a skill and read its files only when needed, and
+// refuse content that does not match the entry. This client loads every skill it is offered and reads every file the entry lists.
+if (scenario.StartsWith("sep-2640-client", StringComparison.Ordinal))
+{
+  return await SkillsScenario.Run(client, scenario);
 }
 
 var failures = 0;
@@ -287,16 +296,45 @@ internal sealed class HeadlessUserAgent(Uri redirect, HttpClient http) : IAuthor
 /// <summary>What each authorization scenario hands the client (in MCP_CONFORMANCE_CONTEXT) and how the client is set up for it.</summary>
 internal static class AuthScenarios
 {
+  // The library will not send a secret to an authorization server the resource merely names, so a real application pins the issuer in
+  // its configuration. The suite's context does not carry one; this client takes the first server the test server's own
+  // protected resource metadata lists, which is the one the suite means.
+  private static string? TrustedIssuer(Uri resource)
+  {
+    using var http = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false });
+    var origin = resource.GetLeftPart(UriPartial.Authority);
+    var path = resource.AbsolutePath == "/" ? string.Empty : resource.AbsolutePath;
+    foreach (var candidate in new[] { origin + "/.well-known/oauth-protected-resource" + path, origin + "/.well-known/oauth-protected-resource" })
+    {
+      try
+      {
+        using var document = JsonDocument.Parse(http.GetStringAsync(candidate).GetAwaiter().GetResult());
+        if (document.RootElement.TryGetProperty("authorization_servers", out var servers) && servers.GetArrayLength() > 0)
+        {
+          return servers[0].GetString();
+        }
+      }
+      catch (Exception ex) when (ex is HttpRequestException or JsonException)
+      {
+        // Try the next location.
+      }
+    }
+
+    // A server with no protected resource metadata is its own authorization server.
+    return origin;
+  }
+
   public static OAuthClientOptions Options(Uri url, string scenario, IAuthorizationUserAgent agent)
   {
     var context = Environment.GetEnvironmentVariable("MCP_CONFORMANCE_CONTEXT") is { Length: > 0 } text ? JsonDocument.Parse(text).RootElement : default;
     string? Ctx(string name) => context.ValueKind == JsonValueKind.Object && context.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
     var clientId = Ctx("client_id");
     var secret = Ctx("client_secret");
+    var issuer = secret is not null || scenario.StartsWith("auth/client-credentials", StringComparison.Ordinal) || scenario.Contains("enterprise", StringComparison.Ordinal) ? TrustedIssuer(url) : null;
     switch (scenario)
     {
       case "auth/client-credentials-basic":
-        return new OAuthClientOptions(url) { ClientCredentials = new ClientCredentialsGrant(clientId!, secret!) };
+        return new OAuthClientOptions(url) { ClientCredentials = new ClientCredentialsGrant(clientId!, secret!) { ExpectedIssuer = issuer } };
       case "auth/client-credentials-jwt":
         var pem = Ctx("private_key_pem")!;
         AsymmetricAlgorithm key = ECDsa.Create();
@@ -310,7 +348,7 @@ internal static class AuthScenarios
           key.ImportFromPem(pem);
         }
 
-        return new OAuthClientOptions(url) { ClientCredentials = new ClientCredentialsGrant(clientId!, key, Ctx("kid")) };
+        return new OAuthClientOptions(url) { ClientCredentials = new ClientCredentialsGrant(clientId!, key, Ctx("kid")) { ExpectedIssuer = issuer } };
       case "auth/enterprise-managed-authorization":
         var idToken = Ctx("idp_id_token")!;
         return new OAuthClientOptions(url)
@@ -318,6 +356,7 @@ internal static class AuthScenarios
           Enterprise = new EnterpriseManagedAuthorization(new Uri(Ctx("idp_token_endpoint")!), _ => ValueTask.FromResult(idToken), clientId!)
           {
             ClientSecret = secret,
+            ExpectedIssuer = issuer,
             IdentityProviderClientId = Ctx("idp_client_id"),
           },
         };
@@ -325,9 +364,84 @@ internal static class AuthScenarios
         return new OAuthClientOptions(url)
         {
           UserAgent = agent,
-          PreRegistered = scenario is "auth/pre-registration" or "auth/token-endpoint-auth-basic" or "auth/token-endpoint-auth-post" && clientId is not null ? new PreRegisteredClient(clientId, secret) : null,
+          PreRegistered = scenario is "auth/pre-registration" or "auth/token-endpoint-auth-basic" or "auth/token-endpoint-auth-post" && clientId is not null ? new PreRegisteredClient(clientId, secret, issuer) : null,
           ClientIdMetadataUrl = Ctx("client_id_metadata_url") ?? "https://conformance-test.local/client-metadata.json",
         };
     }
+  }
+}
+
+/// <summary>What the Skills extension scenarios watch a host do.</summary>
+internal static class SkillsScenario
+{
+  internal static async Task<int> Run(ContextClient client, string scenario)
+  {
+    var refused = 0;
+    var entries = await client.ListSkillsAsync();
+    Console.Error.WriteLine($"listed {entries.Count} skill(s)");
+
+    // Nobody approves a skill here, so nothing needs loading: listing alone must not cause a single file read (Skills extension,
+    // "Lazy Retrieval"). The verification scenarios below load, which is what they observe.
+    if (scenario == "sep-2640-client-no-prefetch")
+    {
+      return 0;
+    }
+
+    foreach (var listed in entries)
+    {
+      var entry = listed;
+      try
+      {
+        // Loading starts by confirming the entry with skills/get, the way a host does after the user approves a skill. A server that
+        // cannot answer it leaves the listed entry in force.
+        try
+        {
+          entry = await client.GetSkillAsync(entry.Uri);
+        }
+        catch (SkillVerificationException)
+        {
+          Console.Error.WriteLine($"skills/get gave no usable entry for {entry.Uri}; using the listed one");
+        }
+
+        var loaded = await client.LoadSkillAsync(entry);
+        Console.Error.WriteLine($"loaded {entry.Uri} ({loaded.SkillMd.Length} bytes)");
+        foreach (var file in entry.Resources ?? [])
+        {
+          if (file.Uri == entry.Uri)
+          {
+            continue;
+          }
+
+          try
+          {
+            var bytes = await client.ReadSkillFileAsync(entry, file.Uri);
+            Console.Error.WriteLine($"read {file.Uri} ({bytes.Length} bytes)");
+          }
+          catch (SkillVerificationException ex)
+          {
+            refused++;
+            Console.Error.WriteLine($"refused {file.Uri}: {ex.Failure}");
+          }
+        }
+      }
+      catch (SkillVerificationException ex)
+      {
+        // Skills extension, "Verification on Read": the content is not used; the host refreshes the entry and starts again from it.
+        refused++;
+        Console.Error.WriteLine($"refused {entry.Uri}: {ex.Failure}");
+        try
+        {
+          entry = await client.GetSkillAsync(entry.Uri);
+          Console.Error.WriteLine($"refreshed {entry.Uri}");
+        }
+        catch (SkillVerificationException)
+        {
+          Console.Error.WriteLine($"skills/get gave no usable entry for {entry.Uri}");
+        }
+      }
+    }
+
+    Console.Error.WriteLine($"done, refused {refused}");
+    return 0;
   }
 }

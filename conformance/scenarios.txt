@@ -151,3 +151,12 @@ client http-standard-headers 2026-07-28
 client http-custom-headers 2026-07-28
 client http-invalid-tool-headers 2026-07-28
 client json-schema-ref-no-deref 2026-07-28
+
+# Skills extension (Beta): forced the same way.
+server sep-2640-skills-enumeration extension
+server sep-2640-skills-manifest extension
+server sep-2640-skills-directory extension
+client sep-2640-client-no-prefetch extension
+client sep-2640-client-verify-digest extension
+client sep-2640-client-verify-size extension
+client sep-2640-client-verify-frontmatter extension

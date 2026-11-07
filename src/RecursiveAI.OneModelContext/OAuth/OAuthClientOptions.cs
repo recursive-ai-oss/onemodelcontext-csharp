@@ -26,7 +26,7 @@ public interface IAuthorizationUserAgent
 /// <summary>Credentials issued to the client at one authorization server, out of band.</summary>
 /// <param name="ClientId">The client identifier.</param>
 /// <param name="ClientSecret">The client secret, or null for a public client. Never logged.</param>
-/// <param name="Issuer">The issuer identifier of the authorization server that issued them. When null, the credentials bind to the first server they are used with and are refused at any other.</param>
+/// <param name="Issuer">The issuer identifier of the authorization server that issued them. Required when <paramref name="ClientSecret"/> is set: a secret is never sent to a server the resource merely names, so the client refuses to start (<c>issuer_required</c>) without it. A public client may leave it null, and then binds to the first server it is used with and is refused at any other.</param>
 public sealed record PreRegisteredClient(string ClientId, string? ClientSecret = null, string? Issuer = null)
 {
   /// <inheritdoc />
@@ -71,7 +71,8 @@ public sealed class ClientCredentialsGrant
 
   /// <summary>
   /// The issuer of the authorization server that provisioned the credentials. When set, the client refuses to send them to any other
-  /// server the resource might advertise. Strongly recommended.
+  /// server the resource might advertise. Required: a client secret or signing key is only ever sent to a server the application named, never
+  /// to one the resource chose, so authorization fails with <c>issuer_required</c> before any request when it is null.
   /// </summary>
   public string? ExpectedIssuer { get; init; }
 
@@ -90,7 +91,7 @@ public sealed class ClientCredentialsGrant
 public sealed class EnterpriseManagedAuthorization
 {
   /// <summary>Creates the configuration.</summary>
-  /// <param name="identityProviderTokenEndpoint">The enterprise IdP's token endpoint (HTTPS, or loopback HTTP).</param>
+  /// <param name="identityProviderTokenEndpoint">The enterprise IdP's token endpoint (HTTPS; loopback HTTP only when the resource itself is on loopback).</param>
   /// <param name="identityAssertion">Returns the user's current OpenID Connect ID token (or other assertion of <see cref="IdentityAssertionType"/>). Called for each exchange so it can refresh.</param>
   /// <param name="clientId">The client identifier used at the MCP authorization server (and, unless <see cref="IdentityProviderClientId"/> says otherwise, at the IdP).</param>
   public EnterpriseManagedAuthorization(Uri identityProviderTokenEndpoint, Func<CancellationToken, ValueTask<string>> identityAssertion, string clientId)
@@ -126,7 +127,7 @@ public sealed class EnterpriseManagedAuthorization
   /// <summary>The scopes to request, space-separated, or null for the scope selection of the authorization page.</summary>
   public string? Scope { get; init; }
 
-  /// <summary>The issuer of the MCP authorization server this configuration is for; the client refuses any other. Strongly recommended.</summary>
+  /// <summary>The issuer of the MCP authorization server this configuration is for; the client refuses any other. Required: authorization fails with <c>issuer_required</c> before any request when it is null, because the identity assertion must not go to a server the resource chose.</summary>
   public string? ExpectedIssuer { get; init; }
 
   /// <inheritdoc />
@@ -210,10 +211,19 @@ public sealed class OAuthClientOptions
   public TimeProvider? TimeProvider { get; init; }
 
   /// <summary>
-  /// The HTTP client for metadata, registration and token requests. Null creates a private one that never follows redirects. A client
-  /// supplied here must not follow redirects either: a 3xx answer is treated as a failure, and no credential is ever re-sent.
+  /// The message handler that sends metadata, registration and token requests, for a host that needs a proxy, a certificate policy or a
+  /// test double. It must not follow redirects: a followed 307 would replay a token request, secret included, at a host the server chose.
+  /// The client checks a <see cref="SocketsHttpHandler"/> or <see cref="HttpClientHandler"/> (also under <see cref="DelegatingHandler"/>s) and
+  /// throws <see cref="ArgumentException"/> from the <see cref="OAuthClient"/> constructor when <c>AllowAutoRedirect</c> is on or when the
+  /// chain ends in a handler it cannot check. Null creates a private handler that never follows redirects. The handler is not disposed with the client.
   /// </summary>
-  public HttpClient? HttpClient { get; init; }
+  public HttpMessageHandler? HttpHandler { get; init; }
+
+  /// <summary>
+  /// After a <c>403 insufficient_scope</c> challenge that names no scope, the longest wait before another one starts a new authorization
+  /// on the same <see cref="OAuthHttpHandler"/>. A fresh token that is refused the same way is never retried within one request. Default 5 minutes.
+  /// </summary>
+  public TimeSpan StepUpCooldown { get; init; } = TimeSpan.FromMinutes(5);
 
   /// <summary>Whether any grant that can run without a person is configured.</summary>
   internal bool IsNonInteractive => ClientCredentials is not null || Enterprise is not null;
@@ -236,10 +246,13 @@ internal static class OAuthUri
   internal static string? CanonicalResource(string? value) =>
     value is not null && Uri.TryCreate(value, UriKind.Absolute, out var uri) && !value.Contains('#', StringComparison.Ordinal) ? CanonicalResource(uri) : null;
 
-  /// <summary>OAuth 2.1 section 1.5: every endpoint is HTTPS; loopback HTTP is allowed so local development and tests work.</summary>
-  internal static bool IsAllowedEndpoint(Uri uri) =>
+  /// <summary>
+  /// OAuth 2.1 section 1.5: every endpoint is HTTPS. Plain HTTP is allowed only for a loopback endpoint and only when the protected resource
+  /// is on loopback too, so a remote server cannot steer credentials to a plain-HTTP service on the user's own machine.
+  /// </summary>
+  internal static bool IsAllowedEndpoint(Uri uri, bool resourceIsLoopback) =>
     uri.IsAbsoluteUri && uri.UserInfo.Length == 0 && uri.Fragment.Length == 0
-    && (uri.Scheme == Uri.UriSchemeHttps || (uri.Scheme == Uri.UriSchemeHttp && IsLoopbackHost(uri)));
+    && (uri.Scheme == Uri.UriSchemeHttps || (uri.Scheme == Uri.UriSchemeHttp && resourceIsLoopback && IsLoopbackHost(uri)));
 
   internal static bool IsLoopbackHost(Uri uri) =>
     uri.IsLoopback || string.Equals(uri.IdnHost, "localhost", StringComparison.OrdinalIgnoreCase);
@@ -247,9 +260,9 @@ internal static class OAuthUri
   internal static bool SameOrigin(Uri a, Uri b) =>
     string.Equals(a.Scheme, b.Scheme, StringComparison.OrdinalIgnoreCase) && string.Equals(a.IdnHost, b.IdnHost, StringComparison.OrdinalIgnoreCase) && a.Port == b.Port;
 
-  internal static bool TryHttp([NotNullWhen(true)] string? text, [NotNullWhen(true)] out Uri? uri)
+  internal static bool TryHttp([NotNullWhen(true)] string? text, bool resourceIsLoopback, [NotNullWhen(true)] out Uri? uri)
   {
-    if (text is not null && Uri.TryCreate(text, UriKind.Absolute, out uri) && IsAllowedEndpoint(uri))
+    if (text is not null && Uri.TryCreate(text, UriKind.Absolute, out uri) && IsAllowedEndpoint(uri, resourceIsLoopback))
     {
       return true;
     }

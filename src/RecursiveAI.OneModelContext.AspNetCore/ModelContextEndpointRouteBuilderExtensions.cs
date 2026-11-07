@@ -63,6 +63,10 @@ public static class ModelContextEndpointRouteBuilderExtensions
       endpoints.MapProtectedResourceMetadata(resourceServer, endpoint);
     }
 
+    // A Server Card published with UseServerCard is public by design (browsers read it from other origins), so it is mapped beside the
+    // endpoint, outside its authorization. Without a card the endpoint answers 404.
+    endpoints.MapMethods(pattern.TrimEnd('/') + "/server-card", ["GET", "OPTIONS"], async context => await endpoint.HandleAsync(new AspNetCoreExchange(context)).ConfigureAwait(false)).AllowAnonymous();
+
     return endpoints.Map(pattern, async context => await endpoint.HandleAsync(new AspNetCoreExchange(context)).ConfigureAwait(false));
   }
 

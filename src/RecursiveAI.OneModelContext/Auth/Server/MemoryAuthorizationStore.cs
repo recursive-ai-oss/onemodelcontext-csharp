@@ -196,7 +196,7 @@ public class MemoryAuthorizationStore : IAuthorizationStore
     lock (_gate)
     {
       var before = _state.Codes.Count + _state.RefreshTokens.Count + _state.Revocations.Count + _state.Assertions.Count;
-      Remove(_state.Codes, g => g.ExpiresAt <= now);
+      Remove(_state.Codes, g => (g.Redeemed && g.FamilyExpiresAt > g.ExpiresAt ? g.FamilyExpiresAt : g.ExpiresAt) <= now);
       Remove(_state.RefreshTokens, t => t.FamilyExpiresAt <= now);
       Remove(_state.Revocations, e => e <= now);
       Remove(_state.Assertions, e => e <= now);

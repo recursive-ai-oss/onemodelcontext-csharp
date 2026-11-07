@@ -182,6 +182,41 @@ public sealed class AuthorizationStoreTests : IDisposable
   }
 
   [Fact]
+  public async Task A_spent_code_is_remembered_until_its_family_expires_so_a_late_replay_is_recognised()
+  {
+    await _store.SaveCodeAsync(new AuthorizationCodeGrant
+    {
+      CodeHash = "spent",
+      ClientId = "app",
+      RedirectUri = "https://app.test/cb",
+      Subject = "alice",
+      Resource = "https://mcp.test/mcp",
+      CodeChallenge = "challenge",
+      FamilyId = "fam-1",
+      ExpiresAt = Now.AddMinutes(1),
+      FamilyExpiresAt = Now.AddDays(90),
+    }, Ct);
+    await _store.SaveCodeAsync(Code("unused"), Ct);
+    await _store.RedeemCodeAsync("spent", Now, Ct);
+
+    await _store.PurgeAsync(Now.AddDays(1), Ct);
+    Assert.Equal(RedemptionStatus.AlreadyRedeemed, (await _store.RedeemCodeAsync("spent", Now.AddDays(1), Ct)).Status);
+    Assert.Equal(RedemptionStatus.Unknown, (await _store.RedeemCodeAsync("unused", Now.AddDays(1), Ct)).Status);
+
+    await _store.PurgeAsync(Now.AddDays(91), Ct);
+    Assert.Equal(RedemptionStatus.Unknown, (await _store.RedeemCodeAsync("spent", Now.AddDays(91), Ct)).Status);
+  }
+
+  [Fact]
+  public async Task Client_ids_are_matched_exactly_whatever_the_column_collation()
+  {
+    await _store.SaveClientAsync(new RegisteredClient { ClientId = "Client-A", RedirectUris = ["https://app.test/cb"] }, Ct);
+
+    Assert.NotNull(await _store.FindClientAsync("Client-A", Ct));
+    Assert.Null(await _store.FindClientAsync("client-a", Ct));
+  }
+
+  [Fact]
   public async Task A_context_without_the_tables_fails_with_advice()
   {
     var options = new DbContextOptionsBuilder<BareDbContext>().UseSqlite("Data Source=:memory:").Options;

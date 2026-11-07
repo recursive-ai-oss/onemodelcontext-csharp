@@ -52,6 +52,9 @@ internal sealed class AsHarness : IDisposable
     Seed().GetAwaiter().GetResult();
   }
 
+  /// <summary>The server-wide scope list used by the next <see cref="Build"/>; empty means none, which fails closed for some grants.</summary>
+  internal IReadOnlyList<string> ScopesSupported { get; set; } = ["files:read", "files:write", "admin"];
+
   internal ManualTimeProvider Time { get; } = new();
 
   internal MemoryAuthorizationStore Store { get; }
@@ -84,7 +87,7 @@ internal sealed class AsHarness : IDisposable
       Resources = [Resource, OtherResource],
       SigningKeys = keys,
       Store = Store,
-      ScopesSupported = ["files:read", "files:write", "admin"],
+      ScopesSupported = ScopesSupported,
       TimeProvider = Time,
       AllowMissingResource = allowMissingResource,
       ClientMetadataDocuments = cimdOff ? null : cimd ?? new ClientMetadataDocumentOptions(),

@@ -115,7 +115,17 @@ public sealed class StreamableHttpEndpoint : IDisposable
 
   private async ValueTask RouteAsync(Call call)
   {
-    if (!HostAllowed(call.Request) || !OriginAllowed(call.Request))
+    var hostAllowed = HostAllowed(call.Request);
+
+    // Server Cards: the card is public metadata that browser clients read from other origins, so it is answered before the Origin check
+    // (CORS "*" is part of its specification) and before authentication. The Host check still applies.
+    if (hostAllowed && (call.Request.Method is "GET" or "OPTIONS") && call.Request.Path.EndsWith(ServerCardPathSuffix, StringComparison.Ordinal))
+    {
+      await ServeServerCardAsync(call).ConfigureAwait(false);
+      return;
+    }
+
+    if (!hostAllowed || !OriginAllowed(call.Request))
     {
       // Streamable HTTP "Security Warning": an Origin that is present and invalid gets 403. A Host we do not serve gets the same.
       await WriteErrorAsync(call, 403, JsonRpcErrorCodes.InvalidRequest, "Forbidden: the Host or Origin header is not allowed.").ConfigureAwait(false);
@@ -156,6 +166,99 @@ public sealed class StreamableHttpEndpoint : IDisposable
         await WriteErrorAsync(call, 405, JsonRpcErrorCodes.InvalidRequest, "Method not allowed.").ConfigureAwait(false);
         break;
     }
+  }
+
+  // ---- Server Card ----------------------------------------------------------------------------------------------------------
+
+  private const string ServerCardPathSuffix = "/server-card";
+
+  // Server Cards, "Hosted Server Card Location", "CORS Requirements" and "Caching".
+  private async ValueTask ServeServerCardAsync(Call call)
+  {
+    var response = call.Response;
+    if (!Extensions.ServerCards.ServerCardsServerExtensions.TryGetDocument(_server, out var document))
+    {
+      await WriteErrorAsync(call, 404, JsonRpcErrorCodes.InvalidRequest, "Not found.").ConfigureAwait(false);
+      return;
+    }
+
+    response.SetHeader("Access-Control-Allow-Origin", "*");
+    response.SetHeader("Access-Control-Allow-Methods", "GET");
+    response.SetHeader("Access-Control-Allow-Headers", "Content-Type, If-None-Match");
+    response.SetHeader("Access-Control-Expose-Headers", "ETag");
+    call.ResponseStarted = true;
+    if (call.Request.Method == "OPTIONS")
+    {
+      response.StatusCode = 204;
+      await response.Body.FlushAsync(call.Exchange.Aborted).ConfigureAwait(false);
+      return;
+    }
+
+    if (!AcceptsServerCard(call.Request.Headers.GetAll("Accept")))
+    {
+      response.StatusCode = 406;
+      await response.Body.FlushAsync(call.Exchange.Aborted).ConfigureAwait(false);
+      return;
+    }
+
+    response.SetHeader("Cache-Control", "public, max-age=3600");
+    response.SetHeader("ETag", document.ETag);
+    if (IfNoneMatchContains(call.Request.Headers.GetFirst("If-None-Match"), document.ETag))
+    {
+      response.StatusCode = 304;
+      await response.Body.FlushAsync(call.Exchange.Aborted).ConfigureAwait(false);
+      return;
+    }
+
+    response.StatusCode = 200;
+    response.SetHeader("Content-Type", Extensions.ServerCards.ServerCard.MediaType);
+    await response.Body.WriteAsync(document.Json, call.Exchange.Aborted).ConfigureAwait(false);
+    await response.Body.FlushAsync(call.Exchange.Aborted).ConfigureAwait(false);
+  }
+
+  // No Accept header, or one that allows the card's media type, JSON, or anything.
+  private static bool AcceptsServerCard(IReadOnlyList<string> accept)
+  {
+    if (accept.Count == 0)
+    {
+      return true;
+    }
+
+    foreach (var header in accept)
+    {
+      foreach (var part in header.Split(','))
+      {
+        var type = part.Split(';')[0].Trim();
+        if (type.Equals(Extensions.ServerCards.ServerCard.MediaType, StringComparison.OrdinalIgnoreCase)
+          || type.Equals("application/json", StringComparison.OrdinalIgnoreCase)
+          || type is "*/*" or "application/*")
+        {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  // RFC 9110 section 13.1.2: "*" matches any current representation; otherwise the weak comparison of the listed entity tags.
+  private static bool IfNoneMatchContains(string? header, string eTag)
+  {
+    if (header is null)
+    {
+      return false;
+    }
+
+    foreach (var part in header.Split(','))
+    {
+      var candidate = part.Trim();
+      if (candidate == "*" || (candidate.StartsWith("W/", StringComparison.Ordinal) ? candidate[2..] : candidate) == eTag)
+      {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   // ---- Authorization (resource server) --------------------------------------------------------------------------------------

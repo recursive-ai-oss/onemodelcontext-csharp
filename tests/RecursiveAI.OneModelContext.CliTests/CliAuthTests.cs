@@ -183,4 +183,70 @@ public sealed class CliAuthTests : IAsyncDisposable
     Assert.Equal(4, code);
     Assert.DoesNotContain("not-a-valid-token", err);
   }
+
+  [Fact]
+  public async Task A_client_secret_needs_an_issuer_and_can_come_from_the_environment_standard_input_or_a_file()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var url = _resource.AbsoluteUri;
+
+    // Literal, file and standard input forms all reach the check that a secret must name its issuer.
+    var secretFile = Path.Combine(_dir, "secret.txt");
+    await File.WriteAllTextAsync(secretFile, "file-secret-value\n", ct);
+    var name = "OMC_TEST_SECRET_" + Guid.NewGuid().ToString("N");
+    Environment.SetEnvironmentVariable(name, "env-secret-value");
+    try
+    {
+      foreach (var form in new[] { "literal-secret-value", "@" + secretFile, "env:" + name })
+      {
+        var (code, _, err) = await RunAsync(null, "login", url, "--client-id", "app", "--client-secret", form, "--token-store", TokenFile);
+        Assert.Equal(2, code);
+        Assert.Contains("--issuer", err);
+        Assert.DoesNotContain("secret-value", err);
+      }
+
+      var output = new StringWriter();
+      var error = new StringWriter();
+      var app = new CliApp(output, error, new StringReader("stdin-secret-value\n"), "test", colour: false);
+      var viaStdin = await app.RunAsync(["login", url, "--client-id", "app", "--client-secret", "-", "--token-store", TokenFile], ct);
+      Assert.Equal(2, viaStdin);
+      Assert.Contains("--issuer", error.ToString());
+
+      var (missing, _, missingErr) = await RunAsync(null, "login", url, "--client-id", "app", "--client-secret", "env:OMC_NO_SUCH_VARIABLE_0", "--token-store", TokenFile);
+      Assert.Equal(2, missing);
+      Assert.Contains("OMC_NO_SUCH_VARIABLE_0", missingErr);
+    }
+    finally
+    {
+      Environment.SetEnvironmentVariable(name, null);
+    }
+
+    // Usage errors stop before anything is read or written.
+    Assert.False(File.Exists(TokenFile));
+  }
+
+  [Fact]
+  public async Task A_login_that_fails_leaves_the_stored_tokens_as_they_were()
+  {
+    var ct = TestContext.Current.CancellationToken;
+    var key = "token:" + _resource.AbsoluteUri;
+    using (var seed = new FileTokenStore(TokenFile))
+    {
+      await seed.SetAsync(key, new TokenRecord { Issuer = _as.Issuer.ToString().TrimEnd('/'), ClientId = "cli-app", AccessToken = "previous-access-token-value", ExpiresAt = DateTimeOffset.UtcNow.AddHours(1), Resource = _resource.AbsoluteUri }, ct);
+    }
+
+    // The user refuses at the authorization server: the browser sends the redirect back with an error and the right state.
+    static async ValueTask Refuse(Uri url, CancellationToken token)
+    {
+      var query = url.Query.TrimStart('?').Split('&').Select(p => p.Split('=', 2)).ToDictionary(p => p[0], p => Uri.UnescapeDataString(p[1]));
+      using var client = new HttpClient();
+      using var _ = await client.GetAsync(query["redirect_uri"] + "?error=access_denied&state=" + Uri.EscapeDataString(query["state"]), token);
+    }
+
+    var (code, _, _) = await RunAsync(Refuse, "login", _resource.AbsoluteUri, "--client-id", "cli-app", "--token-store", TokenFile);
+
+    Assert.NotEqual(0, code);
+    using var after = new FileTokenStore(TokenFile);
+    Assert.Equal("previous-access-token-value", (await after.GetAsync(key, ct))!.AccessToken);
+  }
 }

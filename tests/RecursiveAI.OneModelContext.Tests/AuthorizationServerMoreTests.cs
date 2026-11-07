@@ -728,7 +728,7 @@ public sealed class EnterpriseAuthorizationTests : IDisposable
     Assert.False(body.TryGetProperty("refresh_token", out _));
     var result = await _h.PlainValidator(await _h.PublishedKeysAsync()).ValidateAsync(body.GetProperty("access_token").GetString()!, new TokenValidationRequest(AsHarness.Resource), TestContext.Current.CancellationToken);
     Assert.True(result.IsValid, result.Description);
-    Assert.Equal("user-42", result.Principal!.FindFirst("sub")!.Value);
+    Assert.Equal(IdpIssuer + "#user-42", result.Principal!.FindFirst("sub")!.Value);
     Assert.Equal("svc", result.Principal.FindFirst("client_id")!.Value);
   }
 
@@ -868,11 +868,15 @@ public sealed class EnterpriseAuthorizationTests : IDisposable
       CreatedAt = _h.Time.GetUtcNow(),
     }, TestContext.Current.CancellationToken);
 
+    _h.Build([_h.Key1], enterprise: new EnterpriseAuthorizationOptions
+    {
+      IdentityProviders = [new TrustedIdentityProvider(IdpIssuer, new StaticJwksProvider(JsonWebKeySet.Parse(Encoding.UTF8.GetBytes(await PublicJwks()))!))],
+      RequireConfidentialClient = false,
+    });
     var allowed = await _h.TokenAsync([("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"), ("assertion", IdJag(c => c["client_id"] = "pub")), ("client_id", "pub")]);
     _h.Build([_h.Key1], enterprise: new EnterpriseAuthorizationOptions
     {
       IdentityProviders = [new TrustedIdentityProvider(IdpIssuer, new StaticJwksProvider(JsonWebKeySet.Parse(Encoding.UTF8.GetBytes(await PublicJwks()))!))],
-      RequireConfidentialClient = true,
     });
     var refused = await _h.TokenAsync([("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"), ("assertion", IdJag(c => c["client_id"] = "pub")), ("client_id", "pub")]);
 
@@ -1025,7 +1029,7 @@ public sealed class AuthorizationServerFlowTests : IDisposable
   {
     var hash = ClientSecret.Hash("s3cret-value-0123456789");
 
-    Assert.StartsWith("pbkdf2-sha256$", hash, StringComparison.Ordinal);
+    Assert.StartsWith("hmac-sha256$", hash, StringComparison.Ordinal);
     Assert.DoesNotContain("s3cret", hash, StringComparison.Ordinal);
     Assert.NotEqual(hash, ClientSecret.Hash("s3cret-value-0123456789"));
     Assert.True(ClientSecret.Verify("s3cret-value-0123456789", hash));
@@ -1033,6 +1037,12 @@ public sealed class AuthorizationServerFlowTests : IDisposable
     Assert.False(ClientSecret.Verify("anything", null));
     Assert.False(ClientSecret.Verify("anything", "garbage"));
     Assert.False(ClientSecret.Verify("anything", "pbkdf2-sha256$1$AA==$AA=="));
+
+    // Hashes written by earlier versions still verify.
+    var salt = RandomNumberGenerator.GetBytes(16);
+    var legacy = "pbkdf2-sha256$2000$" + Convert.ToBase64String(salt) + "$" + Convert.ToBase64String(Rfc2898DeriveBytes.Pbkdf2("old-secret"u8, salt, 2000, HashAlgorithmName.SHA256, 32));
+    Assert.True(ClientSecret.Verify("old-secret", legacy));
+    Assert.False(ClientSecret.Verify("new-secret", legacy));
     Assert.Equal(43, ClientSecret.Generate().Length);
     await Task.CompletedTask;
   }

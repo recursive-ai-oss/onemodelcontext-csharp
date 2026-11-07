@@ -53,7 +53,7 @@ using (var key = ECDsa.Create(ECCurve.NamedCurves.nistP256))
 using (var oauth = new OAuthClient(new OAuthClientOptions(new Uri("https://example.com/mcp"))
 {
   UserAgent = receiver,
-  ClientCredentials = new ClientCredentialsGrant("smoke", key),
+  ClientCredentials = new ClientCredentialsGrant("smoke", key) { ExpectedIssuer = "https://auth.example" },
   Store = new MemoryTokenStore(),
 }))
 {
@@ -100,6 +100,13 @@ var listed = await legacyServer.HandleMessageAsync("""{"jsonrpc":"2.0","id":2,"m
 if (listed is null || listed.Contains("\"title\"", StringComparison.Ordinal) || !listed.Contains("\"name\":\"t\"", StringComparison.Ordinal))
 {
   Console.Error.WriteLine("legacy result not shaped: " + listed);
+  return 1;
+}
+
+// The experimental extensions: tasks on a file store, skills with verification, and a server card over the listener.
+if (await ExtensionsSmoke.RunAsync() is { } extensionsFailure)
+{
+  Console.Error.WriteLine(extensionsFailure);
   return 1;
 }
 

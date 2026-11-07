@@ -26,7 +26,7 @@ if (args.Contains("--listener"))
 {
   using var listenerEndpoint = new StreamableHttpEndpoint(server);
   await using var http = new HttpServer(
-    exchange => exchange.Request.Path == "/mcp" ? listenerEndpoint.HandleAsync(exchange) : ValueTask.CompletedTask,
+    exchange => exchange.Request.Path is "/mcp" or "/mcp/server-card" ? listenerEndpoint.HandleAsync(exchange) : ValueTask.CompletedTask,
     new HttpServerOptions { Port = port });
   http.Start();
   Console.WriteLine("listening " + http.BaseAddress + "mcp");

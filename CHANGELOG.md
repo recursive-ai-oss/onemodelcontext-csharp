@@ -4,9 +4,22 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+### Changed
+
+- OAuth client hardening: a client secret, signing key or identity assertion is sent only to an issuer the application pinned (`ExpectedIssuer`, `PreRegisteredClient.Issuer`; error `issuer_required`); the loopback receiver ignores callbacks whose `state` is not the one in progress; a stale process adopts a refresh token another process rotated; plain-HTTP OAuth endpoints are allowed only for loopback resources; `OAuthClientOptions.HttpHandler` replaces `HttpClient` and must not follow redirects; a token file that cannot be read or is group/world-writable is never overwritten; a scope-less `insufficient_scope` no longer starts an authorization per request (`StepUpCooldown`). CLI: `--issuer`, secrets from `env:NAME`, `-` or `@file`, and `login` replaces stored tokens only after the new sign-in succeeds.
+- `AuthorizationServer` hardening: the metadata-document cache evicts instead of switching itself off, with a per-host fetch cap and a short
+  per-host backoff (`MaxFetchesPerHost`, `HostFailureBackoff`); Client Credentials and dynamically registered clients are refused scopes
+  unless a scope allow-list applies; scope strings must be RFC 6749 scope tokens; redirect URIs with control characters, whitespace,
+  backslashes or userinfo are refused and a redirect is never sent without a safe `Location`; `RequireConfidentialClient` defaults to
+  true; the default ID-JAG subject is `issuer#sub`; a spent authorization code is remembered until its refresh family expires
+  (`AuthorizationCodeGrant.FamilyExpiresAt`), in the memory, file and EF stores; the server's own validator requires `typ` `at+jwt`
+  (`JwtTokenValidator.RequireAccessTokenType` for others); client secrets use a salted HMAC-SHA-256 hash (PBKDF2 hashes still verify).
+  `ApplyAuthorizationStore` takes an optional binary collation for `client_id`.
+
 ### Added
 
 - Listener and endpoint hardening: `MaxConnectionsPerAddress`, `FirstByteTimeout` and TCP keep-alive on the built-in listener; `MaxInFlightBodyBytes` (request bodies are sized to their declared length) and `MaxStreamLifetime` on `StreamableHttpOptions`; POST needs `Content-Type: application/json` (415); `ModelContext.ServeHttpAsync` caps bodies at 1 MiB; the non-loopback warning reaches standard error when nothing subscribes to diagnostics. See `docs/http-limits.md`.
+- Experimental extensions (`OMCX0001` Tasks, `OMCX0002` Skills, `OMCX0003` Server Cards), off until the host opts in. Tasks: tools that answer with a task handle, `tasks/get`, `tasks/update` and `tasks/cancel`, client polling, and `ITaskStore` with in-memory and file stores. Skills over MCP: `SkillDefinition`, `UseSkills`/`AddSkill`, `skills/list`, `skills/get` and `resources/directory/read` on the server; listing, loading and reading with digest, size and frontmatter verification on the client. Server Cards: published at `<endpoint>/server-card` by the HTTP core, the listener and `MapModelContext`, fetched through the guarded fetcher with AI Catalog discovery. See `docs/extensions.md`.
 - CLI `login` and `logout` for http(s) servers (browser and loopback redirect, tokens in an owner-only file); the other commands use and refresh the stored tokens, and an authorization failure ends with exit code 4 and the challenge summarised, never the token.
 - `RecursiveAI.OneModelContext.EntityFrameworkCore`: `EfAuthorizationStore<TContext>` and `EfTokenStore<TContext>` over your own `DbContext`
   (`modelBuilder.ApplyContextStores()`), for authorization servers and clients that run as several instances. Single-use codes, refresh

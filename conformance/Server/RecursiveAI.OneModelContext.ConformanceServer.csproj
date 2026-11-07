@@ -9,7 +9,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>RecursiveAI.OneModelContext.ConformanceServer</RootNamespace>
     <!-- The suite still runs scenarios for Sampling, Roots and Logging, so this server uses them. -->
-    <NoWarn>$(NoWarn);OMC0001;OMC0002;OMC0003;OMCX0001</NoWarn>
+    <NoWarn>$(NoWarn);OMC0001;OMC0002;OMC0003;OMCX0001;OMCX0002;OMCX0003</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

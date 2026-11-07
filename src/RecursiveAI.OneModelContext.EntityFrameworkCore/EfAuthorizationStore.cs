@@ -47,7 +47,9 @@ public sealed class EfAuthorizationStore<TContext> : IAuthorizationStore
 
     using var db = Open();
     var row = await db.Set<ClientRow>().AsNoTracking().FirstOrDefaultAsync(r => r.ClientId == clientId, cancellationToken).ConfigureAwait(false);
-    return row is null ? null : ToClient(row);
+
+    // A case-insensitive column collation would match "Client" to "client"; ids are compared exactly.
+    return row is null || !string.Equals(row.ClientId, clientId, StringComparison.Ordinal) ? null : ToClient(row);
   }
 
   /// <summary>Adds or replaces a client.</summary>
@@ -94,6 +96,7 @@ public sealed class EfAuthorizationStore<TContext> : IAuthorizationStore
       FamilyId = grant.FamilyId,
       ClaimsJson = StoreKeys.WriteMap(grant.Claims),
       ExpiresAtTicks = StoreKeys.Ticks(grant.ExpiresAt),
+      FamilyExpiresAtTicks = StoreKeys.Ticks(grant.FamilyExpiresAt),
       Redeemed = grant.Redeemed,
     }, grant.CodeHash, cancellationToken).ConfigureAwait(false);
   }
@@ -258,7 +261,7 @@ public sealed class EfAuthorizationStore<TContext> : IAuthorizationStore
   {
     var ticks = now.UtcTicks;
     using var db = Open();
-    await db.Set<CodeRow>().Where(r => r.ExpiresAtTicks <= ticks).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+    await db.Set<CodeRow>().Where(r => r.ExpiresAtTicks <= ticks && (!r.Redeemed || r.FamilyExpiresAtTicks <= ticks)).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
     await db.Set<RefreshTokenRow>().Where(r => r.FamilyExpiresAtTicks <= ticks).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
     await db.Set<RevocationRow>().Where(r => r.ExpiresAtTicks <= ticks).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
     await db.Set<AssertionRow>().Where(r => r.ExpiresAtTicks <= ticks).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
@@ -291,6 +294,7 @@ public sealed class EfAuthorizationStore<TContext> : IAuthorizationStore
     FamilyId = r.FamilyId,
     Claims = StoreKeys.ReadMap(r.ClaimsJson),
     ExpiresAt = StoreKeys.At(r.ExpiresAtTicks),
+    FamilyExpiresAt = StoreKeys.At(r.FamilyExpiresAtTicks),
     Redeemed = redeemed,
   };
 
