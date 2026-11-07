@@ -34,12 +34,27 @@ export DOTNET_ROOT="${DOTNET_ROOT:-$(dirname "$(readlink -f "$(command -v dotnet
 
 "$instrument" "$bin/RecursiveAI.OneModelContext.dll" > /dev/null
 
-corpus="$work/corpus"
-findings="$work/findings"
+corpus="$work/corpus${FUZZ_TARGET:+-$FUZZ_TARGET}"
+findings="$work/findings${FUZZ_TARGET:+-$FUZZ_TARGET}"
 mkdir -p "$corpus" "$findings"
 
 # Seeds: one request per file, in the input layout (method byte, header lines, blank line, body).
 seed() { [[ -e "$corpus/$1" ]] || printf "$2" > "$corpus/$1"; }
+
+# FUZZ_TARGET=listener fuzzes the built-in listener's request head, chunked body and length body parsers instead.
+if [[ "${FUZZ_TARGET:-}" == listener ]]; then
+  seed head-post '\x00POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 12'
+  seed head-chunked '\x00POST /mcp HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked'
+  seed head-smuggle '\x00POST / HTTP/1.1\r\nHost: h\r\nContent-Length: 4\r\nTransfer-Encoding: chunked'
+  seed head-fold '\x00GET / HTTP/1.1\r\nHost: h\r\nX-A: 1\r\n  2'
+  seed chunked '\x015;ext=1\r\nhello\r\n0\r\nX-T: 1\r\n\r\n'
+  seed chunked-two '\x011\r\na\r\n10\r\n0123456789abcdef\r\n0\r\n\r\n'
+  seed length '\x02\x05hello'
+  cd "$findings"
+  exec "$host" --target_path="$(command -v dotnet)" --target_arg="$bin/RecursiveAI.OneModelContext.Fuzz.dll" \
+    -max_total_time="$seconds" -timeout="${FUZZ_TIMEOUT:-10}" -rss_limit_mb="${FUZZ_RSS_MB:-2048}" \
+    -max_len=8192 -artifact_prefix="$findings/" "$@" "$corpus"
+fi
 hdr='Content-Type: application/json\nAccept: application/json, text/event-stream\nMCP-Protocol-Version: 2026-07-28\nMcp-Method: tools/call\nMcp-Name: echo'
 meta='"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}'
 seed modern-call "\x00$hdr\n\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"echo\",\"arguments\":{},$meta}}}"

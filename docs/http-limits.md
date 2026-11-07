@@ -31,3 +31,52 @@ property of `StreamableHttpOptions`.
   stream with `Last-Event-ID`; an unknown id is 400.
 - `server/discover` without `_meta` is answered `-32602` with status 400: the discovery page defines its request as the standard
   `_meta` and nothing else, and every 2026-07-28 request must carry the version and client capabilities there.
+
+# The built-in HTTP listener: limits and defaults
+
+`HttpServer` is a small HTTP/1.1 server on `Socket` (with `SslStream` when a certificate is set) for local tools and command-line
+programs. `ModelContext.ServeHttpAsync` starts one on the loopback address. For a server on the internet, host the endpoint in a web
+framework. The listener checks nothing about `Origin` or `Host`; `StreamableHttpEndpoint` does, as above. Every limit below is a
+property of `HttpServerOptions`.
+
+| Option | Default | Effect |
+|---|---|---|
+| `Address`, `Port` | loopback, 0 | Any other address is an explicit choice and publishes a `DiagnosticKind.Warning` unless `Certificate` or `TrustedProxies` is set. Port 0 picks a free port (`LocalEndPoint`). |
+| `Certificate`, `SslProtocols` | none, OS default | With a certificate every connection is TLS and only `http/1.1` is offered through ALPN. |
+| `TrustedProxies` | none | Only these peers' `X-Forwarded-For`, `-Proto` and `-Host` are believed (the client address is the first address from the right that is not itself a trusted proxy; the last proto and host value). For every other peer all `X-Forwarded-*` and `Forwarded` headers are removed before the handler sees the request. |
+| `MaxConnections` | 256 | Further connections queue in the operating system's accept backlog. |
+| `MaxRequestLineBytes` | 8 KiB | 414. |
+| `MaxHeaderBytes`, `MaxHeaderCount` | 32 KiB, 100 | 431. The head is read into one pooled buffer of this size. |
+| `MaxRequestBodyBytes` | 8 MiB | A larger `Content-Length` gets 413 before anything is read; a chunked body is cut off at the limit with 413. |
+| `IdleTimeout` | 60 s | A keep-alive connection that sends no byte is closed silently. |
+| `HeaderReadTimeout` | 10 s | From the first byte of a request to the end of its head (and for the TLS handshake). Slower gets 408. A sender that trickles bytes still hits it. |
+| `RequestTimeout` | 30 s | From the end of the head to the end of the body. Slower gets 408. |
+| `WriteTimeout` | 30 s | One write to the peer. A client that stops reading is dropped. |
+| `ShutdownGracePeriod` | 5 s | How long `DisposeAsync` waits for handlers after cancelling them. |
+
+## What is refused
+
+The parser is strict (RFC 9112), because a disagreement with a proxy about where a request ends is what request smuggling uses.
+Each of these gets 400 (unless stated), is answered with `Connection: close`, and nothing after it on the connection is parsed:
+
+- a bare CR or LF anywhere in the head; obsolete line folding; whitespace before a header colon; control characters in values;
+- `Content-Length` together with `Transfer-Encoding`; a repeated, signed, spaced or list-valued `Content-Length`;
+- a transfer coding other than a lone `chunked` (501); `Transfer-Encoding` on HTTP/1.0;
+- a missing or repeated `Host` on HTTP/1.1; request targets other than origin-form; lower-case method names; versions other than
+  1.0 and 1.1 (505); bad percent escapes and encoded NULs in the path;
+- malformed chunk sizes (non-hex, signed, spaced, empty, more than 15 digits), a chunk not followed by CRLF, bare LF in chunk framing,
+  obsolete folding in a trailer; `Expect` other than `100-continue` (417).
+
+Chunk extensions are read and ignored (RFC 9112 section 7.1.1) and trailers are read and dropped, both bounded.
+
+## Connection behaviour
+
+- Keep-alive on HTTP/1.1; HTTP/1.0 connections close after the response. Pipelined requests are answered in order, one at a time.
+- A handler that does not read the whole request body leaves the connection open only if the rest is at most 64 KiB; otherwise it closes.
+- `IHttpExchange.Aborted` is cancelled when the peer closes the connection, including closing only its sending side, or the server
+  stops. While a handler runs with a pipelined request already waiting, a hang-up is not watched for.
+- After an error response the server finishes its side, then reads and discards up to 64 KiB for up to 2 s so the peer sees the
+  response instead of a connection reset.
+- A response that is never flushed is sent with `Content-Length`; a flushed one (every event stream) is chunked. A handler may set
+  `Content-Length` itself, and then writing more or fewer bytes closes the connection. `Transfer-Encoding` cannot be set, and header
+  names and values with control characters are refused when set.
