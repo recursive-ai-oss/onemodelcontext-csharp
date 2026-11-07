@@ -13,6 +13,7 @@
 !/src/
 !/tests/
 !/samples/
+!/templates/
 !/conformance/
 !/fuzz/
 !/docs/

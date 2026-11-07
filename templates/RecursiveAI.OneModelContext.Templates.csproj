@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The dotnet new template pack: content only, no assembly. Build and pack with dotnet pack. -->
+  <PropertyGroup>
+    <PackageType>Template</PackageType>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackageId>$(PackagePrefix).OneModelContext.Templates</PackageId>
+    <IsPackable>true</IsPackable>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <IncludeSymbols>false</IncludeSymbols>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <IncludeContentInPack>true</IncludeContentInPack>
+    <ContentTargetFolders>content</ContentTargetFolders>
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <EnablePackageValidation>false</EnablePackageValidation>
+    <Description>dotnet new templates for OneModelContext: a .NET SDK for the Model Context Protocol®. Adds onemodelcontext-server (stdio or HTTP) and onemodelcontext-client. Pre-release; unpublished. Unaffiliated with 1MCP, the Go OneMCP aggregator and the Model Context Protocol project.</Description>
+    <PackageTags>dotnet-new;templates;mcp;model-context-protocol</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="content/**/*" Exclude="**/bin/**;**/obj/**" />
+    <Compile Remove="**/*" />
+  </ItemGroup>
+
+</Project>

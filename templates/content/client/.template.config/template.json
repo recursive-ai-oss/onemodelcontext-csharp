@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Recursive AI, LLC",
+  "classifications": [ "Console", "Model Context Protocol", "Client" ],
+  "identity": "RecursiveAI.OneModelContext.Templates.Client",
+  "name": "OneModelContext client",
+  "description": "A Model Context Protocol client that connects to a server, lists its tools and calls one.",
+  "shortName": "onemodelcontext-client",
+  "sourceName": "OneModelContextClient",
+  "preferNameDirectory": true,
+  "tags": { "language": "C#", "type": "project" },
+  "symbols": {
+    "libraryVersion": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "0.1.0-dev",
+      "replaces": "LIBRARY_VERSION",
+      "description": "The RecursiveAI.OneModelContext package version to reference."
+    }
+  },
+  "primaryOutputs": [ { "path": "OneModelContextClient.csproj" } ]
+}

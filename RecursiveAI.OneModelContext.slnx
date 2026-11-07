@@ -4,9 +4,13 @@
     <Project Path="src/RecursiveAI.OneModelContext.Generator/RecursiveAI.OneModelContext.Generator.csproj" />
     <Project Path="src/RecursiveAI.OneModelContext.Cli/RecursiveAI.OneModelContext.Cli.csproj" />
   </Folder>
+  <Folder Name="/templates/">
+    <Project Path="templates/RecursiveAI.OneModelContext.Templates.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/RecursiveAI.OneModelContext.Tests/RecursiveAI.OneModelContext.Tests.csproj" />
     <Project Path="tests/RecursiveAI.OneModelContext.SamplesTests/RecursiveAI.OneModelContext.SamplesTests.csproj" />
+    <Project Path="tests/RecursiveAI.OneModelContext.CliTests/RecursiveAI.OneModelContext.CliTests.csproj" />
     <Project Path="tests/RecursiveAI.OneModelContext.AotSmoke/RecursiveAI.OneModelContext.AotSmoke.csproj" />
     <Project Path="tests/RecursiveAI.OneModelContext.TestServer/RecursiveAI.OneModelContext.TestServer.csproj" />
     <Project Path="tests/RecursiveAI.OneModelContext.LegacyStdio/RecursiveAI.OneModelContext.LegacyStdio.csproj" />
