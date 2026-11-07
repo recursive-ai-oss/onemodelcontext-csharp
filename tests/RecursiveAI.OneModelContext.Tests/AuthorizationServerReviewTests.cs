@@ -478,10 +478,14 @@ public sealed class ClientMetadataCacheTests : IDisposable
   }
 
   [Fact]
-  public async Task A_host_that_just_failed_is_left_alone_briefly()
+  public async Task A_host_that_timed_out_is_left_alone_briefly()
   {
     var h = Harness(backoff: TimeSpan.FromSeconds(10));
-    await Ask(h, _server.Url("/missing"));
+    _server.Add("/slow", new LoopbackServer.Route(Body: new byte[100], Stall: true, ContentLength: 100));
+    var stalled = Ask(h, _server.Url("/slow"));
+    await WaitForHitsAsync(_server, 1);
+    h.Time.Advance(TimeSpan.FromSeconds(6));
+    Assert.Equal(400, (await stalled).Status);
     var hits = _server.Hits;
     var good = Document(_server, "/good.json");
 
@@ -489,8 +493,29 @@ public sealed class ClientMetadataCacheTests : IDisposable
     Assert.Equal(400, during.Status);
     Assert.Equal(hits, _server.Hits);
 
-    h.Time.Advance(TimeSpan.FromSeconds(11));
+    h.Time.Advance(TimeSpan.FromSeconds(5));
     Assert.True((await Ask(h, good)).RedirectQuery.ContainsKey("code"));
+  }
+
+  [Theory]
+  [InlineData("missing")]
+  [InlineData("html")]
+  [InlineData("huge")]
+  public async Task A_bad_url_on_a_host_never_keeps_that_hosts_other_clients_from_signing_in(string kind)
+  {
+    var h = Harness(backoff: TimeSpan.FromSeconds(10));
+    _server.Add("/bad", kind switch
+    {
+      "html" => new LoopbackServer.Route(ContentType: "text/html", Body: "<p>x</p>"u8.ToArray()),
+      "huge" => new LoopbackServer.Route(Body: new byte[64 * 1024]),
+      _ => new LoopbackServer.Route(404, Body: "{}"u8.ToArray()),
+    });
+    var good = Document(_server, "/good.json");
+
+    Assert.Equal(400, (await Ask(h, _server.Url("/bad"))).Status);
+    var legit = await Ask(h, good);
+
+    Assert.True(legit.RedirectQuery.ContainsKey("code"));
   }
 
   private static async Task WaitForHitsAsync(LoopbackServer server, int hits)

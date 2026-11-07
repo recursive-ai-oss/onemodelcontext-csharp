@@ -200,7 +200,7 @@ internal sealed class ClientMetadataResolver : IDisposable
               set = JsonWebKeySet.Parse(result.Body);
               lifetime = set is null ? _options.FailureCacheLifetime : Clamp(result.CacheLifetime);
             }
-            else
+            else if (result.HostTrouble)
             {
               BackOffHost(uri.Authority, now);
             }
@@ -388,7 +388,13 @@ internal sealed class ClientMetadataResolver : IDisposable
 
       if (!result.Succeeded)
       {
-        BackOffHost(uri.Authority, now);
+        // Only a slow or unreachable host earns a backoff. A status, a bad body or an oversized one is about this URL, which an
+        // anonymous caller can choose freely (a 404 on the victim's own host); it gets the per-URL failure cache and nothing more.
+        if (result.HostTrouble)
+        {
+          BackOffHost(uri.Authority, now);
+        }
+
         return failure;
       }
 
