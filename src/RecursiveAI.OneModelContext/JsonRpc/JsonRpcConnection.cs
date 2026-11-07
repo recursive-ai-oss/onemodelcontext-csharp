@@ -58,6 +58,13 @@ public sealed class JsonRpcConnectionOptions
   /// <summary>How long shutdown waits for cancelled handlers to finish. Default 5 seconds.</summary>
   public TimeSpan ShutdownTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
+  /// <summary>
+  /// Grace after input EOF for admitted requests to finish and queue their responses before cancellation. Default 5 seconds; zero cancels immediately.
+  /// Explicit cancellation or a channel fault skips the grace. Remaining handlers are then cancelled and subject to
+  /// <see cref="ShutdownTimeout"/>; channel disposal drains queued writes separately.
+  /// </summary>
+  public TimeSpan EndOfStreamTimeout { get; init; } = TimeSpan.FromSeconds(5);
+
   /// <summary>Limits applied to every incoming message.</summary>
   public JsonRpcReaderOptions ReaderOptions { get; init; } = new();
 
@@ -114,7 +121,7 @@ public sealed class JsonRpcConnection : IAsyncDisposable
   /// <summary>The exception that ended the connection when the reason was <see cref="JsonRpcCloseReason.ChannelFault"/>.</summary>
   public Exception? Fault { get; private set; }
 
-  /// <summary>True once the connection has stopped reading.</summary>
+  /// <summary>True once shutdown has closed sending, after any input-EOF grace period.</summary>
   public bool IsClosed => Volatile.Read(ref _closing) != 0;
 
   /// <summary>Cancelled when the connection closes.</summary>
@@ -163,6 +170,25 @@ public sealed class JsonRpcConnection : IAsyncDisposable
     {
       Fault = ex;
       reason = JsonRpcCloseReason.ChannelFault;
+    }
+
+    if (reason == JsonRpcCloseReason.EndOfStream)
+    {
+      // Input EOF is a half-close: the peer may still be reading our output. Let admitted requests queue their replies before closing
+      // the write side. A peer that cannot answer a nested request, or a hung handler, must not hold shutdown open indefinitely.
+      var running = _active.Keys.ToArray();
+      if (running.Length > 0)
+      {
+        using var draining = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _closed.Token);
+        try
+        {
+          await Task.WhenAll(running).WaitAsync(_options.EndOfStreamTimeout, _options.TimeProvider, draining.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
+        {
+          // The grace elapsed or the caller stopped the connection; shutdown now cancels any remaining handlers.
+        }
+      }
     }
 
     await ShutdownAsync().ConfigureAwait(false);
