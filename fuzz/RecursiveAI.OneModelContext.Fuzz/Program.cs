@@ -32,6 +32,11 @@ internal static class Program
 
   private static int Main(string[] args)
   {
+    if (AuthorizationServerTarget.Selected)
+    {
+      return AuthorizationServerTarget.Start(args);
+    }
+
     if (args.Length > 0 && args[0] == "replay")
     {
       foreach (var file in args.Skip(1))

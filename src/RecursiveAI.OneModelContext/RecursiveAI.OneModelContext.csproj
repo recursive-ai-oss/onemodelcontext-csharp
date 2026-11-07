@@ -14,7 +14,7 @@
   <!-- Roots, Sampling and Logging are marked [Obsolete] for users (OMC0001 to OMC0003), but this library implements them in full, in code the
        serializer generator also writes. The warnings are hidden here and nowhere else. -->
   <PropertyGroup>
-    <NoWarn>$(NoWarn);OMC0001;OMC0002;OMC0003</NoWarn>
+    <NoWarn>$(NoWarn);OMC0001;OMC0002;OMC0003;OMC0004</NoWarn>
   </PropertyGroup>
 
   <!-- The source generator is built first and ships inside this package as an analyzer, so adding the package is all it
@@ -36,6 +36,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="RecursiveAI.OneModelContext.Tests" />
+    <InternalsVisibleTo Include="RecursiveAI.OneModelContext.Fuzz" />
   </ItemGroup>
 
 </Project>

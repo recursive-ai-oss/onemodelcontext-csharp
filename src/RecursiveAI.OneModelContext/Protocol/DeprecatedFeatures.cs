@@ -15,6 +15,9 @@ internal static class DeprecatedFeatures
   /// <summary>Logging.</summary>
   internal const string LoggingId = "OMC0003";
 
+  /// <summary>Dynamic Client Registration.</summary>
+  internal const string RegistrationId = "OMC0004";
+
   internal const string Roots =
     "Roots are deprecated as of protocol version 2026-07-28. Pass directories or files to the server through tool parameters, resource URIs or server configuration instead.";
 
@@ -23,4 +26,7 @@ internal static class DeprecatedFeatures
 
   internal const string Logging =
     "Logging is deprecated as of protocol version 2026-07-28. Write diagnostics to standard error (stdio servers) or use OpenTelemetry instead.";
+
+  internal const string Registration =
+    "Dynamic Client Registration is deprecated as of protocol version 2026-07-28. Use Client ID Metadata Documents or pre-registered clients instead.";
 }

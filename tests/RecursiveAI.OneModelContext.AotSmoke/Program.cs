@@ -76,6 +76,13 @@ if (listed is null || listed.Contains("\"title\"", StringComparison.Ordinal) || 
   return 1;
 }
 
+// The authorization server: flow, file store, key set validation and the address guard.
+if (await AuthorizationServerSmoke.RunAsync() is { } failure)
+{
+  Console.Error.WriteLine(failure);
+  return 1;
+}
+
 Console.WriteLine("ok " + response);
 return 0;
 
