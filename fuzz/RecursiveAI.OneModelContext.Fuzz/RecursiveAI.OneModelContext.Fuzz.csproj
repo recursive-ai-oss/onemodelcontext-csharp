@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>RecursiveAI.OneModelContext.Fuzz</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!-- The target runs under libFuzzer with SharpFuzz coverage instrumentation, not as a trimmed app. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- A test harness: documentation comments and style rules for shipped code do not apply. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SharpFuzz" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext/RecursiveAI.OneModelContext.csproj" />
+  </ItemGroup>
+
+</Project>
