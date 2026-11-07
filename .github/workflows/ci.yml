@@ -85,6 +85,10 @@ jobs:
         run: conformance/regression-http.sh aspnetcore --out "$RUNNER_TEMP/conformance-results"
       - name: Run the server scenarios on the built-in listener
         run: conformance/regression-http.sh listener --out "$RUNNER_TEMP/conformance-results-listener"
+      - name: Run the authorization scenarios on the conformance client
+        run: |
+          dotnet build conformance/Client -c Release
+          conformance/run.sh regression --only client --out "$RUNNER_TEMP/conformance-results-client" --command "dotnet $ArtifactsPath/bin/RecursiveAI.OneModelContext.ConformanceClient/release/conformance-client.dll"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -92,4 +96,5 @@ jobs:
           path: |
             ${{ runner.temp }}/conformance-results
             ${{ runner.temp }}/conformance-results-listener
+            ${{ runner.temp }}/conformance-results-client
           if-no-files-found: ignore

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- The authorization server the conformance suite's authorization scenarios are pointed at. It signs every request in automatically,
+       because the suite plays the user's browser and expects no login page. It ships in no package. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>RecursiveAI.OneModelContext.ConformanceAuthorizationServer</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext.AspNetCore/RecursiveAI.OneModelContext.AspNetCore.csproj" />
+  </ItemGroup>
+
+</Project>

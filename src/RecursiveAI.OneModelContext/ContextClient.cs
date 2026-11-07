@@ -233,7 +233,7 @@ public sealed partial class ContextClient : IAsyncDisposable
     catch (Exception ex) when (ex is JsonRpcClosedException)
     {
       await rpc.DisposeAsync().ConfigureAwait(false);
-      throw new TransportException("The connection closed during negotiation.", ex);
+      throw (Exception?)AuthorizationFrom(ex) ?? new TransportException("The connection closed during negotiation.", ex);
     }
     catch
     {
@@ -608,7 +608,7 @@ public sealed partial class ContextClient : IAsyncDisposable
         }
         catch (JsonRpcRemoteException remote) when (IsTransportFailure(remote.Error))
         {
-          throw new TransportException(remote.Error.Message);
+          throw (Exception?)AuthorizationFrom(remote.Error) ?? new TransportException(remote.Error.Message);
         }
         catch (JsonRpcRemoteException remote)
         {
@@ -660,6 +660,34 @@ public sealed partial class ContextClient : IAsyncDisposable
       }
     }
   }
+
+  // A 401 or 403 from the HTTP transport, as the typed error that carries the server's challenge.
+  private static AuthorizationException? AuthorizationFrom(Exception closed)
+  {
+    for (var inner = closed; inner is not null; inner = inner.InnerException)
+    {
+      if (inner is Transports.HttpAuthFailure failure)
+      {
+        return new AuthorizationException(failure.Message, failure.Status, ParseChallenges(failure.Challenge));
+      }
+    }
+
+    return null;
+  }
+
+  private static AuthorizationException? AuthorizationFrom(JsonRpcError error)
+  {
+    if (error.Data.ValueKind != JsonValueKind.Object || !error.Data.TryGetProperty("httpStatus", out var status) || !status.TryGetInt32(out var code) || code is not (401 or 403))
+    {
+      return null;
+    }
+
+    var header = error.Data.TryGetProperty("wwwAuthenticate", out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+    return new AuthorizationException(error.Message, code, ParseChallenges(header));
+  }
+
+  private static IReadOnlyList<OAuth.BearerChallenge> ParseChallenges(string? header) =>
+    header is null ? [] : OAuth.BearerChallenge.Parse([header]);
 
   // The HTTP transport reports what went wrong below the protocol (no connection, an HTTP error status) as an error marked in its data.
   private static bool IsTransportFailure(JsonRpcError error) =>

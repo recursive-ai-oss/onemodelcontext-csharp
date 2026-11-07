@@ -418,6 +418,15 @@ internal sealed class HttpChannel : IJsonRpcChannel
       return Outcome.Done;
     }
 
+    // A 401 or 403 is about authorization whatever its body says: it becomes an AuthorizationException with the challenge, so a host (or the
+    // OAuth client) can authorize and try again.
+    if (status is 401 or 403)
+    {
+      var header = response.Headers.WwwAuthenticate.Count > 0 ? string.Join(", ", response.Headers.WwwAuthenticate) : null;
+      await FailAsync(call, status == 401 ? "The server requires authorization (HTTP 401)." : "The server refused the request (HTTP 403).", status, header, ct).ConfigureAwait(false);
+      return Outcome.Done;
+    }
+
     // A body that is a JSON-RPC error is the server's own answer (modern servers use 400 and 404 for protocol errors, 2026-07-28
     // transports "Backward Compatibility"): pass it on with the request's id.
     if (TryReadErrorResponse(body))
@@ -467,7 +476,7 @@ internal sealed class HttpChannel : IJsonRpcChannel
 
     if (_mode == TransportMode.Unknown && (httpStatus is null or 0 or 401 or 403 or >= 500 || call.Method == Methods.Initialize))
     {
-      _inbound.Writer.TryComplete(new IOException(message));
+      _inbound.Writer.TryComplete(httpStatus is 401 or 403 ? new HttpAuthFailure(message, httpStatus.Value, challenge) : new IOException(message));
       return;
     }
 
@@ -1181,4 +1190,12 @@ internal sealed class HttpChannel : IJsonRpcChannel
 
     internal List<(string Header, string Value)>? ParameterHeaders { get; set; }
   }
+}
+
+/// <summary>A 401 or 403 that ended the connection before negotiation finished; the client turns it into an <see cref="AuthorizationException"/>.</summary>
+internal sealed class HttpAuthFailure(string message, int status, string? challenge) : IOException(message)
+{
+  internal int Status => status;
+
+  internal string? Challenge => challenge;
 }

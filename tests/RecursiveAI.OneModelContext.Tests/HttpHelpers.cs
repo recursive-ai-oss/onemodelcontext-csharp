@@ -102,6 +102,8 @@ internal sealed class TestExchange : IHttpExchange, IDisposable
 
     public string Path { get; set; } = "/mcp";
 
+    public string Query { get; set; } = string.Empty;
+
     public HttpHeaders Headers { get; } = new();
 
     public long? ContentLength { get; } = contentLength;

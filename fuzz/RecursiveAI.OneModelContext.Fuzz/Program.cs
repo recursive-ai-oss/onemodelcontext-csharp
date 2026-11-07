@@ -35,6 +35,11 @@ internal static class Program
 
   private static int Main(string[] args)
   {
+    if (AuthorizationServerTarget.Selected)
+    {
+      return AuthorizationServerTarget.Start(args);
+    }
+
     if (args.Length > 0 && args[0] == "replay")
     {
       foreach (var file in args.Skip(1))
@@ -55,8 +60,44 @@ internal static class Program
   {
     "listener" => ListenerTarget.Run(data),
     "sse" => RunSse(data),
+    "oauth" => RunOAuth(data),
     _ => Run(data),
   };
+
+  // FUZZ_TARGET=oauth: what an OAuth client reads from a server it does not trust. Byte 0 picks the parser: a WWW-Authenticate value, a
+  // protected resource metadata document, an authorization server metadata document, or a redirect query. Only OAuthException may come out.
+  private static int RunOAuth(ReadOnlySpan<byte> data)
+  {
+    if (data.Length == 0)
+    {
+      return 0;
+    }
+
+    var body = data[1..];
+    try
+    {
+      switch (data[0] % 4)
+      {
+        case 0:
+          return RecursiveAI.OneModelContext.OAuth.BearerChallenge.Parse([Encoding.UTF8.GetString(body)]).Count;
+        case 1:
+          return RecursiveAI.OneModelContext.OAuth.ResourceMetadata.Parse(body)?.AuthorizationServers.Count ?? 0;
+        case 2:
+          return RecursiveAI.OneModelContext.OAuth.AuthorizationServerMetadata.Parse(body)?.Issuer?.Length ?? 0;
+        default:
+          var query = Encoding.UTF8.GetString(body);
+          return RecursiveAI.OneModelContext.OAuth.AuthorizationResponse.Validate(new Uri("http://127.0.0.1:9/callback?" + query.Replace("#", "%23", StringComparison.Ordinal)), "s", "https://i.example", issParameterSupported: false).Code.Length;
+      }
+    }
+    catch (RecursiveAI.OneModelContext.OAuth.OAuthException)
+    {
+      return 0;
+    }
+    catch (UriFormatException)
+    {
+      return 0;
+    }
+  }
 
   private static ContextServer CreateServer()
   {

@@ -12,6 +12,8 @@ Small programs that show how OneModelContext is used. Each one runs on both prot
 | [`QuickPath`](QuickPath) | The reflection quick path: tools, a resource and a prompt from lambdas, for trying things out. Not trimmable and not NativeAOT. | no |
 | [`HttpServer`](HttpServer) | Two tools served on the built-in HTTP listener with `ModelContext.ServeHttpAsync` (loopback only). | yes |
 | [`AppsServer`](AppsServer) | A tool with a `ui://` view (MCP Apps) and a text fallback for clients that do not render it, served over stdio, `--http`, or a self-demo on each era. | yes |
+| [`HostedServer`](HostedServer) | A generic-host app serving a tool class whose constructor takes a service from the container, over stdio, with `services.AddContextServer<Greeter>().UseStdio()`. The host stops when the client hangs up. | yes |
+| [`ChatTools`](ChatTools) | A server's tools handed to a function-calling `IChatClient` with `client.ToAIFunctionsAsync()`, on each protocol era. Uses a scripted chat client; swap in a real one. | yes |
 | [`StdioServer`](StdioServer) | A notebook server with tools, a resource template and a prompt. | yes |
 
 ## Running them

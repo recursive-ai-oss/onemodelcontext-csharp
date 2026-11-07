@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the harness, instruments the library with SharpFuzz and runs a target under libFuzzer: the HTTP endpoint (default) or, with
-# FUZZ_TARGET=sse, the event-stream reader of the HTTP client.
+# FUZZ_TARGET=sse, the event-stream reader of the HTTP client, or with FUZZ_TARGET=oauth the parsers of what an OAuth client reads from a server.
 #
 #   fuzz/run.sh <seconds> [extra libFuzzer flags]
 #   fuzz/run.sh replay <file>...          run saved inputs once, without libFuzzer (reproduce a finding)
@@ -46,6 +46,15 @@ if [[ "$target" == sse ]]; then
   seed message '\x07id: 1\nretry: 100\ndata: {"jsonrpc":"2.0","id":1,"result":{}}\n\n'
   seed crlf '\x03event: endpoint\r\ndata: /messages?x=1\r\n\r\n: keep-alive\r\ndata: a\r\ndata: b\r\n\r\n'
   seed bom '\x01\xef\xbb\xbfid: 9\n\ndata:\n\ndata: x\r\r'
+elif [[ "$target" == oauth ]]; then
+  # Byte 0 picks the parser: 0 challenge header, 1 resource metadata, 2 server metadata, 3 redirect query.
+  seed challenge '\x00Bearer error="insufficient_scope", scope="a b", resource_metadata="https://r.example/.well-known/x"'
+  seed challenge-two '\x00Basic realm="x", Bearer realm=r, error_description="say \"hi\""'
+  seed resource '\x01{"resource":"https://r.example/mcp","authorization_servers":["https://a.example"],"scopes_supported":["x"]}'
+  seed server '\x02{"issuer":"https://a.example","token_endpoint":"https://a.example/t","code_challenge_methods_supported":["S256"],"authorization_response_iss_parameter_supported":true}'
+  seed redirect '\x03code=abc&state=s&iss=https%3A%2F%2Fi.example'
+  seed redirect-error '\x03error=access_denied&state=s&iss=https%3A%2F%2Fi.example&error_description=no'
+  max_len=4096
 elif [[ "$target" == listener ]]; then
   # The built-in listener's request head, chunked body and length body parsers.
   seed head-post '\x00POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 12'

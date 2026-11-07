@@ -5,7 +5,9 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using RecursiveAI.OneModelContext;
+using System.Security.Cryptography;
 using RecursiveAI.OneModelContext.JsonRpc;
+using RecursiveAI.OneModelContext.OAuth;
 using RecursiveAI.OneModelContext.Protocol;
 using RecursiveAI.OneModelContext.Wire;
 
@@ -35,6 +37,31 @@ if (decoded is null || decoded.Text != "hi" || decoded.Content.Count != 2 || dec
 {
   Console.Error.WriteLine("result not round-tripped: " + response);
   return 1;
+}
+
+// The OAuth client roots its code here so the publish checks it: a challenge, a loopback receiver, a client built with a private-key
+// grant and a file token store, and a token request that finds nothing stored (no network is used).
+var challenges = BearerChallenge.Parse(["Bearer resource_metadata=\"https://example.com/.well-known/oauth-protected-resource\", scope=\"read\""]);
+if (challenges.Count != 1 || challenges[0].Scope != "read")
+{
+  Console.Error.WriteLine("challenge not parsed");
+  return 1;
+}
+
+using (var receiver = new LoopbackRedirectReceiver((_, _) => ValueTask.CompletedTask))
+using (var key = ECDsa.Create(ECCurve.NamedCurves.nistP256))
+using (var oauth = new OAuthClient(new OAuthClientOptions(new Uri("https://example.com/mcp"))
+{
+  UserAgent = receiver,
+  ClientCredentials = new ClientCredentialsGrant("smoke", key),
+  Store = new MemoryTokenStore(),
+}))
+{
+  if (!receiver.RedirectUri.IsLoopback || await oauth.GetAccessTokenAsync() is not null)
+  {
+    Console.Error.WriteLine("oauth client not usable");
+    return 1;
+  }
 }
 
 // A modern (2026-07-28) round trip: discover, a tool call, and an input round trip whose requestState is sealed with AES-GCM.
@@ -73,6 +100,13 @@ var listed = await legacyServer.HandleMessageAsync("""{"jsonrpc":"2.0","id":2,"m
 if (listed is null || listed.Contains("\"title\"", StringComparison.Ordinal) || !listed.Contains("\"name\":\"t\"", StringComparison.Ordinal))
 {
   Console.Error.WriteLine("legacy result not shaped: " + listed);
+  return 1;
+}
+
+// The authorization server: flow, file store, key set validation and the address guard.
+if (await AuthorizationServerSmoke.RunAsync() is { } failure)
+{
+  Console.Error.WriteLine(failure);
   return 1;
 }
 
