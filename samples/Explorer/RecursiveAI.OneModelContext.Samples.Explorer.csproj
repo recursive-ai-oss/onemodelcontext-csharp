@@ -11,6 +11,12 @@
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
+  <!-- Pass -p:SmokeMode=aot to publish with NativeAOT (a project property, because global properties would flow into projects that cannot be). -->
+  <PropertyGroup Condition="'$(SmokeMode)' == 'aot'">
+    <PublishAot>true</PublishAot>
+    <RuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="../../src/RecursiveAI.OneModelContext/RecursiveAI.OneModelContext.csproj" />
   </ItemGroup>

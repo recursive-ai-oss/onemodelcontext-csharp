@@ -44,14 +44,17 @@ if (i + 1 >= args.Length)
   return 2;
 }
 
-await using var server = ServerProcess.Start(args[i + 1], args[(i + 2)..]);
+// The command is started as a child process and spoken to over its standard input and output; its standard error goes to the
+// library's diagnostics. Disposing the client ends the child.
+var console = new ConsoleElicitation(Console.In, Console.Out);
 try
 {
-  await using var client = await ContextClient.ConnectAsync(server.Transport, new ContextClientOptions
+  await using var client = await ContextClient.ConnectAsync(ContextTransport.Process(args[i + 1], args[(i + 2)..]), new ContextClientOptions
   {
     Era = era,
-    Capabilities = ConsoleElicitation.Capabilities,
-    RequestHandler = new ConsoleElicitation(Console.In, Console.Out),
+    // Setting a callback is all it takes to tell the server this client can be asked.
+    OnConfirm = console.ConfirmAsync,
+    OnElicit = console.AskAsync,
   });
   await Tour.RunAsync(client, request with { PromptArguments = promptArguments }, Console.Out);
   return 0;

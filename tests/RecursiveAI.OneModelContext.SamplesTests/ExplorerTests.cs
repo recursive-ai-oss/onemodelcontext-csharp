@@ -10,12 +10,11 @@ namespace RecursiveAI.OneModelContext.SamplesTests;
 
 public class ExplorerTests
 {
-  private static ContextClientOptions Options(EraPreference era, TextReader answers, TextWriter output) => new()
+  private static ContextClientOptions Options(EraPreference era, TextReader answers, TextWriter output)
   {
-    Era = era,
-    Capabilities = ConsoleElicitation.Capabilities,
-    RequestHandler = new ConsoleElicitation(answers, output),
-  };
+    var console = new ConsoleElicitation(answers, output);
+    return new ContextClientOptions { Era = era, OnConfirm = console.ConfirmAsync, OnElicit = console.AskAsync };
+  }
 
   private static ContextServer QuickServerWith(ContextServerOptions options)
   {
@@ -75,8 +74,7 @@ public class ExplorerTests
   {
     // The first sample, started the way a host would start any stdio server.
     var dll = Path.Combine(AppContext.BaseDirectory, "indexed-search.dll");
-    await using var server = ServerProcess.Start("dotnet", [dll]);
-    await using var client = await ContextClient.ConnectAsync(server.Transport, new ContextClientOptions { Era = era }, cancellationToken: TestContext.Current.CancellationToken);
+    await using var client = await ContextClient.ConnectAsync(ContextTransport.Process("dotnet", [dll]), new ContextClientOptions { Era = era }, cancellationToken: TestContext.Current.CancellationToken);
     var report = await Tour.RunAsync(client, new TourRequest(Tool: "search", ToolArguments: """{"query":"leaves"}"""), TextWriter.Null, cancellationToken: TestContext.Current.CancellationToken);
     Assert.Equal(version, report.Version);
     Assert.Contains("Tea", report.CallResult, StringComparison.Ordinal);

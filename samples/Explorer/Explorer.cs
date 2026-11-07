@@ -48,11 +48,9 @@ public static class Tour
       output.WriteLine($"instructions: {instructions}");
     }
 
-    // A server that says how long its list stays valid (ttlMs) lets the client answer the second listing from memory. The page
-    // object is the same instance exactly when that happened.
-    var first = await client.ListToolsPageAsync(cancellationToken: cancellationToken);
-    var second = await client.ListToolsPageAsync(cancellationToken: cancellationToken);
-    var cached = ReferenceEquals(first, second);
+    // A server that says how long its list stays valid (ttlMs) lets the client answer the second listing from memory; FromCache says so.
+    await client.ListToolsPageAsync(cancellationToken: cancellationToken);
+    var cached = (await client.ListToolsPageAsync(cancellationToken: cancellationToken)).FromCache;
     var tools = await client.ListToolsAsync(cancellationToken);
     output.WriteLine($"tools ({tools.Count}, listed twice: {(cached ? "second from cache" : "both from the server")}):");
     foreach (var tool in tools)

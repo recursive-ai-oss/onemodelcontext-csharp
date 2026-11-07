@@ -3,7 +3,6 @@ using System.Text;
 using System.Text.Json;
 using RecursiveAI.OneModelContext;
 using RecursiveAI.OneModelContext.Protocol;
-using RecursiveAI.OneModelContext.Wire;
 
 namespace LiveControl;
 
@@ -137,8 +136,11 @@ public sealed class LiveControlHost : IDisposable
     }
   }
 
-  /// <summary>Starts a page: a channel that carries whole JSON-RPC messages and has no stream, such as a browser tab's message port.</summary>
-  public Page OpenPage() => new(Server);
+  /// <summary>
+  /// Starts a session for a page: a channel that carries whole JSON-RPC messages and has no stream, such as a browser tab's message port.
+  /// Use one session per page.
+  /// </summary>
+  public ContextSession OpenPage() => Server.OpenSession();
 
   private static async ValueTask<CallToolResult> RunAsync(Operation operation, JsonElement arguments)
   {
@@ -189,20 +191,5 @@ public sealed class LiveControlHost : IDisposable
 
       _schemas.Clear();
     }
-  }
-
-  /// <summary>One in-page peer. It keeps the session state a legacy client's handshake builds up, so use one page per peer.</summary>
-  public sealed class Page
-  {
-    private readonly ContextServer _server;
-    private readonly ServerSessionState _session = new();
-
-    internal Page(ContextServer server) => _server = server;
-
-    /// <summary>Handles one JSON-RPC message and returns the reply, or null for a notification. Bad input becomes a JSON-RPC error and never throws.</summary>
-    /// <param name="message">The message text.</param>
-    /// <param name="cancellationToken">Cancels the handler.</param>
-    public ValueTask<string?> SendAsync(string message, CancellationToken cancellationToken = default) =>
-      _server.HandleMessageAsync(message, _session, sink: null, principal: null, cancellationToken);
   }
 }
