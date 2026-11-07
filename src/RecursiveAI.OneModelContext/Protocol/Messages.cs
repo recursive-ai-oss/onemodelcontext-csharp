@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -125,6 +126,7 @@ public sealed class ProgressNotificationParams : RequestParams
 }
 
 /// <summary>Parameters of <c>notifications/message</c>.</summary>
+[Obsolete(DeprecatedFeatures.Logging, DiagnosticId = DeprecatedFeatures.LoggingId)]
 public sealed class LoggingMessageNotificationParams : RequestParams
 {
   /// <summary>One of <see cref="LoggingLevels"/>.</summary>
@@ -141,6 +143,7 @@ public sealed class LoggingMessageNotificationParams : RequestParams
 }
 
 /// <summary>Parameters of <c>logging/setLevel</c> (legacy).</summary>
+[Obsolete(DeprecatedFeatures.Logging, DiagnosticId = DeprecatedFeatures.LoggingId)]
 public sealed class SetLevelRequestParams : RequestParams
 {
   /// <summary>The minimum level to deliver.</summary>
@@ -354,6 +357,7 @@ public sealed class CompleteResult : Result
 }
 
 /// <summary>Parameters of <c>sampling/createMessage</c> (deprecated in 2026-07-28).</summary>
+[Obsolete(DeprecatedFeatures.Sampling, DiagnosticId = DeprecatedFeatures.SamplingId)]
 public sealed class CreateMessageRequestParams : RequestParams
 {
   /// <summary>The conversation.</summary>
@@ -399,6 +403,7 @@ public sealed class CreateMessageRequestParams : RequestParams
 }
 
 /// <summary>Result of <c>sampling/createMessage</c>.</summary>
+[Obsolete(DeprecatedFeatures.Sampling, DiagnosticId = DeprecatedFeatures.SamplingId)]
 public sealed class CreateMessageResult : Result
 {
   /// <summary><c>assistant</c>.</summary>
@@ -420,9 +425,11 @@ public sealed class CreateMessageResult : Result
 }
 
 /// <summary>Parameters of <c>roots/list</c> (deprecated in 2026-07-28).</summary>
+[Obsolete(DeprecatedFeatures.Roots, DiagnosticId = DeprecatedFeatures.RootsId)]
 public sealed class ListRootsRequestParams : RequestParams;
 
 /// <summary>Result of <c>roots/list</c>.</summary>
+[Obsolete(DeprecatedFeatures.Roots, DiagnosticId = DeprecatedFeatures.RootsId)]
 public sealed class ListRootsResult : Result
 {
   /// <summary>The roots.</summary>
@@ -456,6 +463,34 @@ public sealed class ElicitRequestParams : RequestParams
   /// <summary>URL mode (2025-11-25): correlates <c>notifications/elicitation/complete</c>.</summary>
   [JsonPropertyName("elicitationId")]
   public string? ElicitationId { get; init; }
+
+  /// <summary>
+  /// True for the yes/no question <see cref="RequestContext.ConfirmAsync"/> asks: a form with one boolean property named <c>confirm</c>.
+  /// Answer it with <see cref="ElicitResult.Confirmation"/> without looking at the schema.
+  /// </summary>
+  [JsonIgnore]
+  public bool IsConfirmation =>
+    Mode is null or "form"
+    && RequestedSchema.ValueKind == JsonValueKind.Object
+    && RequestedSchema.TryGetProperty("properties", out var properties)
+    && properties.ValueKind == JsonValueKind.Object
+    && OnlyProperty(properties)
+    && properties.TryGetProperty("confirm", out var confirm)
+    && confirm.ValueKind == JsonValueKind.Object
+    && confirm.TryGetProperty("type", out var type)
+    && type.ValueKind == JsonValueKind.String
+    && type.GetString() == "boolean";
+
+  private static bool OnlyProperty(JsonElement properties)
+  {
+    var count = 0;
+    foreach (var unused in properties.EnumerateObject())
+    {
+      count++;
+    }
+
+    return count == 1;
+  }
 }
 
 /// <summary>Result of <c>elicitation/create</c>.</summary>
@@ -468,4 +503,21 @@ public sealed class ElicitResult : Result
   /// <summary>The submitted values when accepted (form mode).</summary>
   [JsonPropertyName("content")]
   public Dictionary<string, JsonElement>? Content { get; init; }
+
+  /// <summary>The user submitted the form.</summary>
+  /// <param name="content">The values, by property name.</param>
+  public static ElicitResult Accept(Dictionary<string, JsonElement>? content = null) => new() { Action = "accept", Content = content };
+
+  /// <summary>The user said no.</summary>
+  public static ElicitResult Decline() => new() { Action = "decline" };
+
+  /// <summary>The user dismissed the question without answering.</summary>
+  public static ElicitResult Cancel() => new() { Action = "cancel" };
+
+  /// <summary>The answer to a yes/no question (see <see cref="ElicitRequestParams.IsConfirmation"/>): accepts with <c>confirm</c> set, or declines.</summary>
+  /// <param name="yes">What the user chose.</param>
+  public static ElicitResult Confirmation(bool yes) =>
+    yes ? Accept(new Dictionary<string, JsonElement> { ["confirm"] = True }) : Decline();
+
+  private static readonly JsonElement True = JsonDocument.Parse("true").RootElement;
 }

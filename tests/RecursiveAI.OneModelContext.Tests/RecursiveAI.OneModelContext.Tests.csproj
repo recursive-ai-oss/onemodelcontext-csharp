@@ -6,11 +6,22 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <RootNamespace>RecursiveAI.OneModelContext.Tests</RootNamespace>
+    <!-- These tests exercise Sampling, Roots and Logging on purpose. -->
+    <NoWarn>$(NoWarn);OMC0001;OMC0002;OMC0003</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+  </ItemGroup>
+
+  <!-- The stdio sample is built with the tests and started as a child process by the ConnectAsync tests. -->
+  <ItemGroup>
+    <ProjectReference Include="../../samples/StdioServer/RecursiveAI.OneModelContext.Samples.StdioServer.csproj" ReferenceOutputAssembly="false" />
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SampleServerDll</_Parameter1>
+      <_Parameter2>$(ArtifactsPath)/bin/RecursiveAI.OneModelContext.Samples.StdioServer/$(Configuration.ToLowerInvariant())/stdio-server.dll</_Parameter2>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

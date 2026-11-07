@@ -10,6 +10,15 @@ namespace RecursiveAI.OneModelContext.Hosting;
 public sealed class StreamableHttpOptions
 {
   /// <summary>
+  /// Makes the endpoint an OAuth resource server: it serves the protected resource metadata, requires a valid bearer token on every
+  /// request (401 with a <c>WWW-Authenticate</c> challenge otherwise), and enforces per-tool, per-resource and per-prompt
+  /// <c>RequiredScopes</c> with 403 <c>insufficient_scope</c>. A caller the host already authenticated (<see cref="Http.IHttpExchange.User"/>,
+  /// for example by the ASP.NET Core authentication handler) is not asked for a token again, but its scopes are still checked.
+  /// Default null: the endpoint does not authenticate.
+  /// </summary>
+  public Auth.ResourceServer? ResourceServer { get; init; }
+
+  /// <summary>
   /// Origins allowed in addition to loopback origins, written as the browser sends them (<c>https://app.example.com</c>, no trailing
   /// slash), compared case-insensitively and in full. <c>*</c> allows every origin, which switches off the defence against DNS
   /// rebinding; use it only behind your own checks. Default: none.

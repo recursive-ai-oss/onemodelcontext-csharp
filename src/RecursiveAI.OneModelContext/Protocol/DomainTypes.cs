@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
@@ -411,6 +412,7 @@ public sealed class PromptMessage : WireObject
 }
 
 /// <summary>A root: a place in the client's world the server may work in (deprecated in 2026-07-28).</summary>
+[Obsolete(DeprecatedFeatures.Roots, DiagnosticId = DeprecatedFeatures.RootsId)]
 public sealed class Root : WireObject
 {
   /// <summary>The URI; <c>file:</c> in practice.</summary>
@@ -427,6 +429,7 @@ public sealed class Root : WireObject
 }
 
 /// <summary>A message in a sampling request or result. <c>content</c> is a single block or an array on the wire.</summary>
+[Obsolete(DeprecatedFeatures.Sampling, DiagnosticId = DeprecatedFeatures.SamplingId)]
 public sealed class SamplingMessage : WireObject
 {
   /// <summary><c>user</c> or <c>assistant</c>.</summary>
@@ -447,6 +450,7 @@ public sealed class SamplingMessage : WireObject
 }
 
 /// <summary>How a server weighs model choice in a sampling request.</summary>
+[Obsolete(DeprecatedFeatures.Sampling, DiagnosticId = DeprecatedFeatures.SamplingId)]
 public sealed class ModelPreferences : WireObject
 {
   /// <summary>Model name hints, tried in order.</summary>
@@ -467,6 +471,7 @@ public sealed class ModelPreferences : WireObject
 }
 
 /// <summary>A model name hint.</summary>
+[Obsolete(DeprecatedFeatures.Sampling, DiagnosticId = DeprecatedFeatures.SamplingId)]
 public sealed class ModelHint : WireObject
 {
   /// <summary>A model name or a substring of one.</summary>

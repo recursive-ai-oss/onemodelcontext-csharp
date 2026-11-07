@@ -80,6 +80,14 @@ public sealed class ToolDefinition
   /// <summary>The <c>_meta</c> of the listing.</summary>
   public MetaObject? Meta { get; init; }
 
+  /// <summary>
+  /// OAuth scopes a token must carry to use this tool over HTTP, or null for none beyond the server's own. Checked before the handler runs,
+  /// by a <see cref="Auth.ResourceServer"/> configured on the HTTP endpoint; a token without them gets 403 with <c>insufficient_scope</c>.
+  /// Not sent to clients in listings. Ignored on stdio and other transports that carry no token.
+  /// </summary>
+  public IReadOnlyList<string>? RequiredScopes { get; init; }
+
+
   /// <summary>The listing entry for this tool.</summary>
   public Tool ToTool() => new()
   {
@@ -114,6 +122,13 @@ public sealed record ResourceDefinition(string Uri, string Name)
   /// <summary>Hints.</summary>
   public Annotations? Annotations { get; init; }
 
+  /// <summary>
+  /// OAuth scopes a token must carry to use this resource over HTTP, or null for none beyond the server's own. Checked before the handler runs,
+  /// by a <see cref="Auth.ResourceServer"/> configured on the HTTP endpoint; a token without them gets 403 with <c>insufficient_scope</c>.
+  /// Not sent to clients in listings. Ignored on stdio and other transports that carry no token.
+  /// </summary>
+  public IReadOnlyList<string>? RequiredScopes { get; init; }
+
   /// <summary>The listing entry.</summary>
   public Resource ToResource() => new() { Uri = Uri, Name = Name, Title = Title, Description = Description, MimeType = MimeType, Size = Size, Annotations = Annotations };
 }
@@ -135,6 +150,13 @@ public sealed record ResourceTemplateDefinition(string UriTemplate, string Name)
   /// <summary>Hints.</summary>
   public Annotations? Annotations { get; init; }
 
+  /// <summary>
+  /// OAuth scopes a token must carry to use this resource template over HTTP, or null for none beyond the server's own. Checked before the handler runs,
+  /// by a <see cref="Auth.ResourceServer"/> configured on the HTTP endpoint; a token without them gets 403 with <c>insufficient_scope</c>.
+  /// Not sent to clients in listings. Ignored on stdio and other transports that carry no token.
+  /// </summary>
+  public IReadOnlyList<string>? RequiredScopes { get; init; }
+
   /// <summary>The listing entry.</summary>
   public ResourceTemplate ToResourceTemplate() => new() { UriTemplate = UriTemplate, Name = Name, Title = Title, Description = Description, MimeType = MimeType, Annotations = Annotations };
 }
@@ -149,6 +171,13 @@ public sealed record PromptDefinition(string Name, string? Description = null)
 
   /// <summary>The arguments it takes.</summary>
   public IReadOnlyList<PromptArgument>? Arguments { get; init; }
+
+  /// <summary>
+  /// OAuth scopes a token must carry to use this prompt over HTTP, or null for none beyond the server's own. Checked before the handler runs,
+  /// by a <see cref="Auth.ResourceServer"/> configured on the HTTP endpoint; a token without them gets 403 with <c>insufficient_scope</c>.
+  /// Not sent to clients in listings. Ignored on stdio and other transports that carry no token.
+  /// </summary>
+  public IReadOnlyList<string>? RequiredScopes { get; init; }
 
   /// <summary>The listing entry.</summary>
   public Prompt ToPrompt() => new() { Name = Name, Title = Title, Description = Description, Arguments = Arguments is null ? null : [.. Arguments] };

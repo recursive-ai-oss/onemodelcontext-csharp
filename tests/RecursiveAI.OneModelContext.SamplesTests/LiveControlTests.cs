@@ -120,19 +120,19 @@ public class LiveControlTests
     // Modern: no handshake, every request carries its own version and identity.
     var modern = host.OpenPage();
     const string meta = "\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientInfo\":{\"name\":\"page\",\"version\":\"1\"},\"io.modelcontextprotocol/clientCapabilities\":{}}";
-    var list = await modern.SendAsync("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{" + meta + "}}", cancellationToken: TestContext.Current.CancellationToken);
+    var list = await modern.HandleAsync("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{" + meta + "}}", cancellationToken: TestContext.Current.CancellationToken);
     Assert.Contains("\"snap\"", list, StringComparison.Ordinal);
 
     // Legacy: initialize first; the page remembers the negotiated revision.
     var legacy = host.OpenPage();
-    var init = await legacy.SendAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"page","version":"1"}}}""", cancellationToken: TestContext.Current.CancellationToken);
+    var init = await legacy.HandleAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"page","version":"1"}}}""", cancellationToken: TestContext.Current.CancellationToken);
     Assert.Contains("\"protocolVersion\":\"2025-06-18\"", init, StringComparison.Ordinal);
-    Assert.Null(await legacy.SendAsync("""{"jsonrpc":"2.0","method":"notifications/initialized"}""", cancellationToken: TestContext.Current.CancellationToken));
-    var call = await legacy.SendAsync("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"snap","arguments":{}}}""", cancellationToken: TestContext.Current.CancellationToken);
+    Assert.Null(await legacy.HandleAsync("""{"jsonrpc":"2.0","method":"notifications/initialized"}""", cancellationToken: TestContext.Current.CancellationToken));
+    var call = await legacy.HandleAsync("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"snap","arguments":{}}}""", cancellationToken: TestContext.Current.CancellationToken);
     Assert.Contains("image/png", call, StringComparison.Ordinal);
 
     // Bad input never throws; it is answered with a JSON-RPC error.
-    var bad = await legacy.SendAsync("{ not json", cancellationToken: TestContext.Current.CancellationToken);
+    var bad = await legacy.HandleAsync("{ not json", cancellationToken: TestContext.Current.CancellationToken);
     using var error = JsonDocument.Parse(bad!);
     Assert.Equal(-32700, error.RootElement.GetProperty("error").GetProperty("code").GetInt32());
   }

@@ -41,6 +41,9 @@ internal sealed class HttpSession : IServerSink, IDisposable
 
   internal string Id { get; }
 
+  /// <summary>The subject that created the session when the endpoint authenticates callers; null when it does not.</summary>
+  internal string? Owner { get; init; }
+
   /// <summary>The registration that lets the server notify this session outside a request; ended with the session.</summary>
   internal IDisposable? Attachment { get; set; }
 

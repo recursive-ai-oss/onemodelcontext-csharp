@@ -1,0 +1,6 @@
+<Project>
+
+  <!-- Package metadata and build settings shared with the other packages. -->
+  <Import Project="../src/Directory.Build.props" />
+
+</Project>

@@ -1,33 +1,8 @@
 using System.IO.Pipelines;
 using System.Text.Json;
 using RecursiveAI.OneModelContext;
-using RecursiveAI.OneModelContext.Protocol;
-using RecursiveAI.OneModelContext.Wire;
 
 namespace ToolBridge;
-
-/// <summary>Answers the server's confirmation questions the way a host application's dialog would.</summary>
-/// <param name="approve">Whether the user clicks yes.</param>
-public sealed class ApprovalHandler(bool approve) : IClientRequestHandler
-{
-  /// <summary>The questions asked so far.</summary>
-  public List<string> Questions { get; } = [];
-
-  /// <inheritdoc />
-  public ValueTask<Result> HandleAsync(string method, JsonElement parameters, CancellationToken cancellationToken)
-  {
-    if (method != "elicitation/create")
-    {
-      throw new ProtocolException(-32601, "This client only answers elicitation.");
-    }
-
-    Questions.Add(parameters.GetProperty("message").GetString() ?? "");
-    Result answer = approve
-      ? new ElicitResult { Action = "accept", Content = new() { ["confirm"] = JsonDocument.Parse("true").RootElement } }
-      : new ElicitResult { Action = "decline" };
-    return ValueTask.FromResult(answer);
-  }
-}
 
 /// <summary>Runs the bridge end to end in one process: a server on one end of a pair of pipes, a client on the other.</summary>
 public static class Demo
@@ -61,19 +36,23 @@ public static class Demo
     using var cancel = new CancellationTokenSource();
     var serving = server.RunAsync(ContextTransport.Stream(toServer.Reader.AsStream(), toClient.Writer.AsStream()), cancel.Token);
 
-    var host = new ApprovalHandler(approve);
+    // The host application's dialog. Setting OnConfirm also tells the server this client can be asked, and the library answers the
+    // protocol's form for a yes/no question, so the callback only deals with the question and the answer.
+    var questions = new List<string>();
     var options = new ContextClientOptions
     {
       Era = era,
-      // The client says it can elicit; without this the server would not ask.
-      Capabilities = new ClientCapabilities { Elicitation = new ElicitationCapability() },
-      RequestHandler = host,
+      OnConfirm = (question, _) =>
+      {
+        questions.Add(question);
+        return ValueTask.FromResult(approve);
+      },
     };
     await using var client = await ContextClient.ConnectAsync(ContextTransport.Stream(toClient.Reader.AsStream(), toServer.Writer.AsStream()), options);
     output.WriteLine($"connected on {client.ProtocolVersion} ({client.Era})");
 
     var result = await client.CallToolAsync("delete_file", JsonDocument.Parse("""{"path":"/tmp/old.log"}""").RootElement);
-    output.WriteLine($"delete_file -> {result.Text} (isError: {result.IsError == true}); asked: {string.Join(" | ", host.Questions)}");
+    output.WriteLine($"delete_file -> {result.Text} (isError: {result.IsError == true}); asked: {string.Join(" | ", questions)}");
 
     await cancel.CancelAsync();
     try
@@ -85,6 +64,6 @@ public static class Demo
       // Shutdown.
     }
 
-    return (client.ProtocolVersion, result.Text, host.Questions, deleted);
+    return (client.ProtocolVersion, result.Text, questions, deleted);
   }
 }

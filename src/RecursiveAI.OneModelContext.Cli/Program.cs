@@ -1,11 +1,13 @@
 using System;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace RecursiveAI.OneModelContext.Cli;
 
 internal static class Program
 {
-  private static int Main(string[] args)
+  private static async Task<int> Main(string[] args)
   {
     var version = typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
     var plus = version.IndexOf('+', StringComparison.Ordinal);
@@ -14,13 +16,16 @@ internal static class Program
       version = version[..plus];
     }
 
-    if (args.Length == 0 || args[0] is "--version" or "version")
+    // Colour only on a terminal, and never when NO_COLOR is set (https://no-color.org).
+    var colour = !Console.IsOutputRedirected && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR"));
+    using var cancel = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
     {
-      Console.Out.WriteLine("onemodelcontext " + version);
-      return 0;
-    }
+      e.Cancel = true;
+      cancel.Cancel();
+    };
 
-    Console.Error.WriteLine("onemodelcontext: unknown command '" + args[0] + "'. Only --version is available in this build.");
-    return 2;
+    var app = new CliApp(Console.Out, Console.Error, Console.In, version, colour);
+    return await app.RunAsync(args, cancel.Token).ConfigureAwait(false);
   }
 }
