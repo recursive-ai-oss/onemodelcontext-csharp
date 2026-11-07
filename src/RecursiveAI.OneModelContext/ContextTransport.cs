@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -72,6 +73,32 @@ public abstract class ContextTransport : IAsyncDisposable
   {
     var words = SplitCommandLine(commandLine);
     return Process(words[0], words.Skip(1), options);
+  }
+
+  /// <summary>
+  /// Streamable HTTP, the client side: every message is a POST to <paramref name="endpoint"/>, and the response is a JSON body or an event
+  /// stream. It speaks both eras (2026-07-28 and the 2024-11-05 to 2025-11-25 revisions, with sessions, the GET stream and resumption) and
+  /// falls back to the deprecated HTTP+SSE transport when the server only speaks that (see <see cref="HttpTransportOptions.AllowSseFallback"/>).
+  /// The era each origin spoke is remembered by the client.
+  /// </summary>
+  /// <param name="endpoint">The server's URL. It must be absolute <c>http</c> or <c>https</c> and must not carry a user name or password. Keep credentials out of the URL; add them with <see cref="HttpTransportOptions.AuthorizeRequest"/>.</param>
+  /// <param name="client">The <see cref="HttpClient"/> to use, which the transport does not dispose. Its <see cref="HttpClient.Timeout"/> must be long or infinite, because event streams stay open, and it should not follow redirects. <c>null</c> creates one that does not follow redirects and has no overall timeout.</param>
+  /// <param name="options">Limits and hooks; <c>null</c> for the defaults.</param>
+  /// <exception cref="ArgumentException"><paramref name="endpoint"/> is not an absolute http or https URL, or has user information.</exception>
+  public static ContextTransport Http(Uri endpoint, HttpClient? client = null, HttpTransportOptions? options = null)
+  {
+    ArgumentNullException.ThrowIfNull(endpoint);
+    if (!endpoint.IsAbsoluteUri || (endpoint.Scheme != Uri.UriSchemeHttp && endpoint.Scheme != Uri.UriSchemeHttps))
+    {
+      throw new ArgumentException("The endpoint must be an absolute http or https URL.", nameof(endpoint));
+    }
+
+    if (endpoint.UserInfo.Length != 0)
+    {
+      throw new ArgumentException("The endpoint must not contain a user name or password.", nameof(endpoint));
+    }
+
+    return new Transports.HttpClientTransport(endpoint, client, options ?? new HttpTransportOptions());
   }
 
   /// <summary>
