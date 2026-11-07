@@ -49,9 +49,9 @@ public static class Tour
     }
 
     // A server that says how long its list stays valid (ttlMs) lets the client answer the second listing from memory; FromCache says so.
-    await client.ListToolsPageAsync(cancellationToken: cancellationToken);
-    var cached = (await client.ListToolsPageAsync(cancellationToken: cancellationToken)).FromCache;
+    await client.ListToolsAsync(cancellationToken);
     var tools = await client.ListToolsAsync(cancellationToken);
+    var cached = tools.FromCache;
     output.WriteLine($"tools ({tools.Count}, listed twice: {(cached ? "second from cache" : "both from the server")}):");
     foreach (var tool in tools)
     {

@@ -7,7 +7,7 @@ Small programs that show how OneModelContext is used. Each one runs on both prot
 | [`IndexedSearch`](IndexedSearch) | A search tool over an in-memory index, served over stdio in one line. `[Tool]` on a partial class; the generator writes the schema and the invoker. | yes |
 | [`LiveControl`](LiveControl) | A running application exposing operations that are only known at runtime: dynamic tools on a `ContextServer`, served over a Unix socket (`ContextTransport.Stream`) and through `ContextServer.OpenSession`, the message-level entry an in-page channel uses. Operations come and go while agents are connected. | yes |
 | [`ToolBridge`](ToolBridge) | Tools defined by another framework (name, description, JSON schema, async delegate) served as tools, including one that asks the user first with `RequestContext.ConfirmAsync`, answered on the client by one `OnConfirm` callback. | yes |
-| [`Explorer`](Explorer) | A client for any stdio server: connect (the era is negotiated), list tools, call one, read a resource, get a prompt, answer the server's questions from typed host callbacks (`OnConfirm`, `OnElicit`). Spawns the server with `ContextTransport.Process`. | yes |
+| [`Explorer`](Explorer) | A client for any stdio server: connect (the era is negotiated), list tools, call one, read a resource, get a prompt, answer the server's questions from typed host callbacks (`OnConfirm`, `OnElicit`). Connects with `ModelContext.ConnectAsync("<command>", onConfirm: ...)`. | yes |
 | [`QuickPath`](QuickPath) | The reflection quick path: tools, a resource and a prompt from lambdas, for trying things out. Not trimmable and not NativeAOT. | no |
 | [`StdioServer`](StdioServer) | A notebook server with tools, a resource template and a prompt. | yes |
 

@@ -25,7 +25,7 @@ public class ConnectAsyncTests
   private static async Task ListAndCallAsync(string command, EraPreference era, ProtocolEra expected)
   {
     var token = TestContext.Current.CancellationToken;
-    await using var client = await ModelContext.ConnectAsync(command, era, token);
+    await using var client = await ModelContext.ConnectAsync(command, era, cancellationToken: token);
     Assert.Equal(expected, client.Era);
 
     var tools = await client.ListToolsAsync(token);

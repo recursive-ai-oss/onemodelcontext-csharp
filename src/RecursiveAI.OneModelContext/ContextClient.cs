@@ -224,20 +224,22 @@ public sealed partial class ContextClient : IAsyncDisposable
     }
   }
 
-  /// <summary>Lists every tool, following pages up to <see cref="ContextClientOptions.MaxListPages"/>.</summary>
+  /// <summary>Lists every tool, following pages up to <see cref="ContextClientOptions.MaxListPages"/>. <see cref="ListedItems{T}.FromCache"/> says whether no request was needed.</summary>
   /// <param name="cancellationToken">Cancels the call.</param>
-  public async ValueTask<IReadOnlyList<Tool>> ListToolsAsync(CancellationToken cancellationToken = default)
+  public async ValueTask<ListedItems<Tool>> ListToolsAsync(CancellationToken cancellationToken = default)
   {
     var all = new List<Tool>();
+    var cached = true;
     string? cursor = null;
     for (var page = 0; page < _options.MaxListPages; page++)
     {
       var result = await ListToolsPageAsync(cursor, cancellationToken).ConfigureAwait(false);
       all.AddRange(result.Tools);
+      cached &= result.FromCache;
       cursor = result.NextCursor;
       if (cursor is null)
       {
-        return all;
+        return new ListedItems<Tool>(all, cached);
       }
     }
 
@@ -252,18 +254,20 @@ public sealed partial class ContextClient : IAsyncDisposable
 
   /// <summary>Lists every resource.</summary>
   /// <param name="cancellationToken">Cancels the call.</param>
-  public async ValueTask<IReadOnlyList<Resource>> ListResourcesAsync(CancellationToken cancellationToken = default)
+  public async ValueTask<ListedItems<Resource>> ListResourcesAsync(CancellationToken cancellationToken = default)
   {
     var all = new List<Resource>();
+    var cached = true;
     string? cursor = null;
     for (var page = 0; page < _options.MaxListPages; page++)
     {
       var result = await ListResourcesPageAsync(cursor, cancellationToken).ConfigureAwait(false);
       all.AddRange(result.Resources);
+      cached &= result.FromCache;
       cursor = result.NextCursor;
       if (cursor is null)
       {
-        return all;
+        return new ListedItems<Resource>(all, cached);
       }
     }
 
@@ -278,18 +282,20 @@ public sealed partial class ContextClient : IAsyncDisposable
 
   /// <summary>Lists every resource template.</summary>
   /// <param name="cancellationToken">Cancels the call.</param>
-  public async ValueTask<IReadOnlyList<ResourceTemplate>> ListResourceTemplatesAsync(CancellationToken cancellationToken = default)
+  public async ValueTask<ListedItems<ResourceTemplate>> ListResourceTemplatesAsync(CancellationToken cancellationToken = default)
   {
     var all = new List<ResourceTemplate>();
+    var cached = true;
     string? cursor = null;
     for (var page = 0; page < _options.MaxListPages; page++)
     {
       var result = await CallAsync<ListResourceTemplatesResult>(Methods.ResourcesTemplatesList, new PaginatedRequestParams { Cursor = cursor }, cancellationToken, cacheKey: Methods.ResourcesTemplatesList + "\0" + cursor).ConfigureAwait(false);
       all.AddRange(result.ResourceTemplates);
+      cached &= result.FromCache;
       cursor = result.NextCursor;
       if (cursor is null)
       {
-        return all;
+        return new ListedItems<ResourceTemplate>(all, cached);
       }
     }
 
@@ -298,18 +304,20 @@ public sealed partial class ContextClient : IAsyncDisposable
 
   /// <summary>Lists every prompt.</summary>
   /// <param name="cancellationToken">Cancels the call.</param>
-  public async ValueTask<IReadOnlyList<Prompt>> ListPromptsAsync(CancellationToken cancellationToken = default)
+  public async ValueTask<ListedItems<Prompt>> ListPromptsAsync(CancellationToken cancellationToken = default)
   {
     var all = new List<Prompt>();
+    var cached = true;
     string? cursor = null;
     for (var page = 0; page < _options.MaxListPages; page++)
     {
       var result = await CallAsync<ListPromptsResult>(Methods.PromptsList, new PaginatedRequestParams { Cursor = cursor }, cancellationToken, cacheKey: Methods.PromptsList + "\0" + cursor).ConfigureAwait(false);
       all.AddRange(result.Prompts);
+      cached &= result.FromCache;
       cursor = result.NextCursor;
       if (cursor is null)
       {
-        return all;
+        return new ListedItems<Prompt>(all, cached);
       }
     }
 
