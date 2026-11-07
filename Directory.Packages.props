@@ -28,7 +28,7 @@
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.AI" Version="10.11.0" />
   </ItemGroup>
-  <!-- Interop project only: the official C# SDK, run as a reference client and server. -->
+  <!-- Interop and bench projects only: the official C# SDK, run black-box as a reference client and server and as the speed reference. -->
   <ItemGroup>
     <PackageVersion Include="ModelContextProtocol" Version="2.4.0" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.4.0" />
