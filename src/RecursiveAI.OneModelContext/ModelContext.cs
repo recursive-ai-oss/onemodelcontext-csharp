@@ -81,6 +81,29 @@ public static class ModelContext
     return await ContextClient.ConnectAsync(transport, new ContextClientOptions { Era = era }, cancellationToken).ConfigureAwait(false);
   }
 
+  /// <summary>Connects to a server named by a command line and negotiates the protocol era (or uses the one you pin).</summary>
+  /// <param name="commandOrUrl">
+  /// A command line such as <c>npx -y some-server --flag "a b"</c>, started as a child process that speaks over standard input and output
+  /// (see <see cref="ContextTransport.ProcessFromCommandLine"/>: no shell runs). An <c>http://</c> or <c>https://</c> URL is not supported yet.
+  /// </param>
+  /// <param name="era">Pin the era when a server is known to need it; <see cref="EraPreference.Auto"/> negotiates and remembers the answer per server.</param>
+  /// <param name="cancellationToken">Cancels the connection attempt and ends the child process.</param>
+  /// <returns>The connected client; dispose it to disconnect and stop the child process.</returns>
+  /// <exception cref="ArgumentException"><paramref name="commandOrUrl"/> is empty or has an unclosed quote.</exception>
+  /// <exception cref="NotSupportedException"><paramref name="commandOrUrl"/> is an HTTP URL: Streamable HTTP arrives with the HTTP client.</exception>
+  /// <exception cref="ProtocolVersionException">The server and client share no protocol revision.</exception>
+  public static Task<ContextClient> ConnectAsync(string commandOrUrl, EraPreference era = EraPreference.Auto, CancellationToken cancellationToken = default)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(commandOrUrl);
+    var text = commandOrUrl.Trim();
+    if (text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || text.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+    {
+      throw new NotSupportedException("Connecting to a URL needs the Streamable HTTP client, which arrives with the HTTP client; only a command line (stdio) is supported now.");
+    }
+
+    return ConnectAsync(ContextTransport.ProcessFromCommandLine(text), era, cancellationToken);
+  }
+
   private static (string Name, string Version) EntryAssemblyIdentity()
   {
     var assembly = Assembly.GetEntryAssembly();

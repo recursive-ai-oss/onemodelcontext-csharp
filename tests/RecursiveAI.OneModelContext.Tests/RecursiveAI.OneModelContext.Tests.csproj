@@ -13,6 +13,15 @@
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
   </ItemGroup>
 
+  <!-- The stdio sample is built with the tests and started as a child process by the ConnectAsync tests. -->
+  <ItemGroup>
+    <ProjectReference Include="../../samples/StdioServer/RecursiveAI.OneModelContext.Samples.StdioServer.csproj" ReferenceOutputAssembly="false" />
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SampleServerDll</_Parameter1>
+      <_Parameter2>$(ArtifactsPath)/bin/RecursiveAI.OneModelContext.Samples.StdioServer/$(Configuration.ToLowerInvariant())/stdio-server.dll</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="../../src/RecursiveAI.OneModelContext/RecursiveAI.OneModelContext.csproj" />
     <ProjectReference Include="../../src/RecursiveAI.OneModelContext.Generator/RecursiveAI.OneModelContext.Generator.csproj" OutputItemType="Analyzer" />
