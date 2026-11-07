@@ -39,6 +39,13 @@ public sealed class HttpServerOptions
   /// <summary>Most connections served at once. Further connections wait in the operating system's queue. Default 256.</summary>
   public int MaxConnections { get; init; } = 256;
 
+  /// <summary>
+  /// Most connections one client address may hold at once, so a single peer cannot take every slot with idle sockets. A further
+  /// connection from that address is closed at once. Counted per IP address, with IPv4-mapped IPv6 addresses folded in. Default 64.
+  /// Behind a reverse proxy every client shares the proxy's address: raise it to <see cref="MaxConnections"/> there.
+  /// </summary>
+  public int MaxConnectionsPerAddress { get; init; } = 64;
+
   /// <summary>Longest request line (method, target and version) in bytes. A longer one gets 414. Default 8 KiB.</summary>
   public int MaxRequestLineBytes { get; init; } = 8 * 1024;
 
@@ -53,6 +60,12 @@ public sealed class HttpServerOptions
   /// off at the limit and the connection closed. Default 8 MiB.
   /// </summary>
   public long MaxRequestBodyBytes { get; init; } = 8 * 1024 * 1024;
+
+  /// <summary>
+  /// How long a new connection may stay silent before its first request byte arrives, then it is closed without a word. Shorter than
+  /// <see cref="IdleTimeout"/> because a client that opens a connection sends its request at once. Default 10 seconds.
+  /// </summary>
+  public TimeSpan FirstByteTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
   /// <summary>How long a keep-alive connection may wait for the first byte of the next request before it is closed. Default 60 seconds.</summary>
   public TimeSpan IdleTimeout { get; init; } = TimeSpan.FromSeconds(60);

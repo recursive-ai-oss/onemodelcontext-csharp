@@ -6,6 +6,7 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
 
 ### Added
 
+- Listener and endpoint hardening: `MaxConnectionsPerAddress`, `FirstByteTimeout` and TCP keep-alive on the built-in listener; `MaxInFlightBodyBytes` (request bodies are sized to their declared length) and `MaxStreamLifetime` on `StreamableHttpOptions`; POST needs `Content-Type: application/json` (415); `ModelContext.ServeHttpAsync` caps bodies at 1 MiB; the non-loopback warning reaches standard error when nothing subscribes to diagnostics. See `docs/http-limits.md`.
 - CLI `login` and `logout` for http(s) servers (browser and loopback redirect, tokens in an owner-only file); the other commands use and refresh the stored tokens, and an authorization failure ends with exit code 4 and the challenge summarised, never the token.
 - `RecursiveAI.OneModelContext.EntityFrameworkCore`: `EfAuthorizationStore<TContext>` and `EfTokenStore<TContext>` over your own `DbContext`
   (`modelBuilder.ApplyContextStores()`), for authorization servers and clients that run as several instances. Single-use codes, refresh

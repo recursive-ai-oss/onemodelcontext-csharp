@@ -29,6 +29,7 @@ internal sealed class HttpConnection : IDisposable, IRequestBodyOwner
   private (int Status, string Reason)? _error;
   private bool _continuePending;
   private bool _broken;
+  private bool _served;
 
   internal HttpConnection(HttpServer server, Socket socket)
   {
@@ -192,7 +193,8 @@ internal sealed class HttpConnection : IDisposable, IRequestBodyOwner
     {
       if (_stream is SslStream ssl)
       {
-        await ssl.ShutdownAsync().ConfigureAwait(false);
+        // close_notify is a write; a peer that stopped reading must not hold the slot past the linger time.
+        await BoundedAsync(ssl.ShutdownAsync(), LingerTimeout, Server.Time, Server.Shutdown).ConfigureAwait(false);
       }
 
       _socket.Shutdown(SocketShutdown.Send);
@@ -201,6 +203,19 @@ internal sealed class HttpConnection : IDisposable, IRequestBodyOwner
     catch (Exception ex) when (ex is OperationCanceledException or IOException or SocketException or ObjectDisposedException or InvalidOperationException)
     {
       // The peer is gone or slow; close anyway.
+    }
+  }
+
+  /// <summary>Waits for <paramref name="work"/> at most <paramref name="limit"/>; throws <see cref="OperationCanceledException"/> when it takes longer.</summary>
+  internal static async Task BoundedAsync(Task work, TimeSpan limit, TimeProvider time, CancellationToken cancellationToken)
+  {
+    try
+    {
+      await work.WaitAsync(limit, time, cancellationToken).ConfigureAwait(false);
+    }
+    catch (TimeoutException ex)
+    {
+      throw new OperationCanceledException("The operation did not finish in time.", ex);
     }
   }
 
@@ -228,7 +243,9 @@ internal sealed class HttpConnection : IDisposable, IRequestBodyOwner
     _continuePending = false;
 
     RequestHead? head;
-    using (var timer = new CancellationTokenSource(options.IdleTimeout, Server.Time))
+    var idle = _served ? options.IdleTimeout : (options.FirstByteTimeout < options.IdleTimeout ? options.FirstByteTimeout : options.IdleTimeout);
+    _served = true;
+    using (var timer = new CancellationTokenSource(idle, Server.Time))
     using (var linked = CancellationTokenSource.CreateLinkedTokenSource(timer.Token, Server.Shutdown))
     {
       try
@@ -494,7 +511,7 @@ internal sealed class HttpConnection : IDisposable, IRequestBodyOwner
     var text = reason + "\n";
     var head = string.Create(
       System.Globalization.CultureInfo.InvariantCulture,
-      $"HTTP/1.1 {status} {ErrorReason(status)}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {Encoding.UTF8.GetByteCount(text)}\r\nConnection: close\r\n\r\n{text}");
+      $"HTTP/1.1 {status} {ErrorReason(status)}\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nContent-Length: {Encoding.UTF8.GetByteCount(text)}\r\nConnection: close\r\n\r\n{text}");
     try
     {
       await WriteAsync(Encoding.UTF8.GetBytes(head), Server.Shutdown).ConfigureAwait(false);

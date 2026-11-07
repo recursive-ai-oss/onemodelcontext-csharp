@@ -129,11 +129,11 @@ public static partial class ModelContext
       throw new ArgumentException("The path starts with '/'.", nameof(path));
     }
 
-    using var endpoint = new StreamableHttpEndpoint(server, new StreamableHttpOptions { ResourceServer = resourceServer });
+    using var endpoint = new StreamableHttpEndpoint(server, new StreamableHttpOptions { ResourceServer = resourceServer, MaxRequestBodyBytes = LocalBodyLimit });
     // The protected resource metadata is served at its well-known paths, which are not under the endpoint path (RFC 9728 section 3.1).
     await using var http = new HttpServer(
       exchange => exchange.Request.Path == path || (resourceServer?.IsMetadataPath(exchange.Request.Path) ?? false) ? endpoint.HandleAsync(exchange) : NotFoundAsync(exchange),
-      new HttpServerOptions { Port = port },
+      new HttpServerOptions { Port = port, MaxRequestBodyBytes = LocalBodyLimit },
       server.Options.TimeProvider);
     http.Start();
     onListening?.Invoke(new Uri(http.BaseAddress!, path));
@@ -146,6 +146,9 @@ public static partial class ModelContext
       // Cancelling is how a server is stopped.
     }
   }
+
+  // A local tool server gets small requests; 1 MiB is far above a normal tools/call and keeps a hostile local page from making it buffer 8.
+  internal const int LocalBodyLimit = 1024 * 1024;
 
   private static async ValueTask NotFoundAsync(IHttpExchange exchange)
   {

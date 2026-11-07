@@ -381,8 +381,10 @@ public sealed class StreamableHttpEndpoint : IDisposable
   private async ValueTask PostAsync(Call call)
   {
     var request = call.Request;
-    if (request.Headers.GetFirst("Content-Type") is { } contentType
-      && !contentType.AsSpan().TrimStart().StartsWith("application/json", StringComparison.OrdinalIgnoreCase))
+    // A POST without a JSON content type is refused, so a browser page cannot send a request that skips the CORS preflight (text/plain,
+    // form types and a missing type are the "simple" ones). Both eras' clients send application/json (Streamable HTTP, "Sending Messages to the Server").
+    if (request.Headers.GetFirst("Content-Type") is not { } contentType
+      || !IsJsonMediaType(contentType))
     {
       await WriteErrorAsync(call, 415, JsonRpcErrorCodes.InvalidRequest, "Unsupported media type: send application/json.").ConfigureAwait(false);
       return;
@@ -398,7 +400,7 @@ public sealed class StreamableHttpEndpoint : IDisposable
       return;
     }
 
-    var body = await ReadBodyAsync(call).ConfigureAwait(false);
+    using var body = await ReadBodyAsync(call).ConfigureAwait(false);
     if (body is null)
     {
       return;
@@ -770,7 +772,7 @@ public sealed class StreamableHttpEndpoint : IDisposable
     call.ResponseStarted = true;
     await response.Body.FlushAsync(call.Exchange.Aborted).ConfigureAwait(false);
     using var writer = new SseWriter(response.Body);
-    var connection = await stream.AttachAsync(writer, after, call.Exchange.Aborted).ConfigureAwait(false);
+    var connection = await stream.AttachAsync(writer, after, call.Exchange.Aborted, _options.MaxStreamLifetime).ConfigureAwait(false);
     try
     {
       using var linked = CancellationTokenSource.CreateLinkedTokenSource(call.Exchange.Aborted, _shutdown.Token, session.Closed);
@@ -955,7 +957,75 @@ public sealed class StreamableHttpEndpoint : IDisposable
 
   // ---- Reading and writing ---------------------------------------------------------------------------------------------------
 
-  private async ValueTask<ArrayBufferWriter<byte>?> ReadBodyAsync(Call call)
+  /// <summary>Whether a <c>Content-Type</c> value names <c>application/json</c>, ignoring parameters such as the charset.</summary>
+  private static bool IsJsonMediaType(string contentType)
+  {
+    var span = contentType.AsSpan().TrimStart();
+    var end = span.IndexOf(';');
+    span = (end < 0 ? span : span[..end]).TrimEnd();
+    return span.Equals("application/json", StringComparison.OrdinalIgnoreCase);
+  }
+
+  private long _inFlightBodyBytes;
+
+  private bool TryReserveBody(long bytes)
+  {
+    if (Interlocked.Add(ref _inFlightBodyBytes, bytes) <= _options.MaxInFlightBodyBytes)
+    {
+      return true;
+    }
+
+    Interlocked.Add(ref _inFlightBodyBytes, -bytes);
+    return false;
+  }
+
+  /// <summary>A request body held in memory. It is sized to what the client declared, charged against the in-flight budget and returned when disposed.</summary>
+  private sealed class BodyLease(StreamableHttpEndpoint owner) : IDisposable
+  {
+    private long _reserved;
+    private bool _disposed;
+
+    internal byte[] Buffer { get; private set; } = [];
+
+    internal int Length { get; set; }
+
+    internal ReadOnlyMemory<byte> WrittenMemory => Buffer.AsMemory(0, Length);
+
+    /// <summary>Grows the buffer to <paramref name="capacity"/> bytes, charging the difference; false when the budget is exhausted.</summary>
+    internal bool TryResize(int capacity)
+    {
+      var extra = capacity - Buffer.Length;
+      if (extra <= 0)
+      {
+        return true;
+      }
+
+      if (!owner.TryReserveBody(extra))
+      {
+        return false;
+      }
+
+      _reserved += extra;
+      var grown = new byte[capacity];
+      Buffer.AsSpan(0, Length).CopyTo(grown);
+      Buffer = grown;
+      return true;
+    }
+
+    public void Dispose()
+    {
+      if (_disposed)
+      {
+        return;
+      }
+
+      _disposed = true;
+      Interlocked.Add(ref owner._inFlightBodyBytes, -_reserved);
+      _reserved = 0;
+    }
+  }
+
+  private async ValueTask<BodyLease?> ReadBodyAsync(Call call)
   {
     var request = call.Request;
     var max = _options.MaxRequestBodyBytes;
@@ -965,33 +1035,87 @@ public sealed class StreamableHttpEndpoint : IDisposable
       return null;
     }
 
-    var buffer = new ArrayBufferWriter<byte>((int)Math.Min(Math.Max(request.ContentLength ?? 4096, 256), 1 << 20));
-    using var timeout = new CancellationTokenSource(_options.BodyReadTimeout, _time);
-    using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, call.Exchange.Aborted, _shutdown.Token);
+    var lease = new BodyLease(this);
     try
     {
+      // With a declared length the buffer is exactly that size, so a body costs what it says and no more; without one it grows by
+      // doubling up to the limit, and every step is charged to the in-flight budget.
+      var declared = request.ContentLength;
+      if (!lease.TryResize(declared is { } length ? (int)length : (int)Math.Min(4096, max)))
+      {
+        return await RefuseBusyAsync(call, lease).ConfigureAwait(false);
+      }
+
+      using var timeout = new CancellationTokenSource(_options.BodyReadTimeout, _time);
+      using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, call.Exchange.Aborted, _shutdown.Token);
+      var probe = new byte[1];
       while (true)
       {
-        var memory = buffer.GetMemory(4096);
-        var read = await request.Body.ReadAsync(memory, linked.Token).ConfigureAwait(false);
-        if (read == 0)
+        int read;
+        if (lease.Length == lease.Buffer.Length)
         {
-          return buffer;
+          if (declared is not null)
+          {
+            // The declared bytes are all here; one more read sees the end of the body.
+            read = await request.Body.ReadAsync(probe, linked.Token).ConfigureAwait(false);
+            if (read == 0)
+            {
+              return lease;
+            }
+
+            lease.Dispose();
+            await WriteErrorAsync(call, 413, JsonRpcErrorCodes.InvalidRequest, "Payload too large.").ConfigureAwait(false);
+            return null;
+          }
+
+          if (lease.Length >= max)
+          {
+            // Full at the limit: a further byte means the body is too large.
+            read = await request.Body.ReadAsync(probe, linked.Token).ConfigureAwait(false);
+            if (read == 0)
+            {
+              return lease;
+            }
+
+            lease.Dispose();
+            await WriteErrorAsync(call, 413, JsonRpcErrorCodes.InvalidRequest, "Payload too large.").ConfigureAwait(false);
+            return null;
+          }
+
+          if (!lease.TryResize((int)Math.Min((long)lease.Buffer.Length * 2, max)))
+          {
+            return await RefuseBusyAsync(call, lease).ConfigureAwait(false);
+          }
         }
 
-        buffer.Advance(read);
-        if (buffer.WrittenCount > max)
+        read = await request.Body.ReadAsync(lease.Buffer.AsMemory(lease.Length), linked.Token).ConfigureAwait(false);
+        if (read == 0)
         {
-          await WriteErrorAsync(call, 413, JsonRpcErrorCodes.InvalidRequest, "Payload too large.").ConfigureAwait(false);
-          return null;
+          return lease;
         }
+
+        lease.Length += read;
       }
     }
-    catch (OperationCanceledException) when (timeout.IsCancellationRequested && !call.Exchange.Aborted.IsCancellationRequested)
+    catch (OperationCanceledException) when (!call.Exchange.Aborted.IsCancellationRequested && !_shutdown.IsCancellationRequested)
     {
+      lease.Dispose();
       await WriteErrorAsync(call, 408, JsonRpcErrorCodes.InvalidRequest, "Request timeout: the body took too long.").ConfigureAwait(false);
       return null;
     }
+    catch
+    {
+      lease.Dispose();
+      throw;
+    }
+  }
+
+  private static async ValueTask<BodyLease?> RefuseBusyAsync(Call call, BodyLease lease)
+  {
+    lease.Dispose();
+    call.Response.SetHeader("Retry-After", "1");
+    await WriteErrorAsync(call, 503, JsonRpcErrorCodes.InvalidRequest, "Server busy: too many request bodies are in flight. Retry shortly.").ConfigureAwait(false);
+    return null;
   }
 
   private static void ApplySseHeaders(IHttpResponse response)

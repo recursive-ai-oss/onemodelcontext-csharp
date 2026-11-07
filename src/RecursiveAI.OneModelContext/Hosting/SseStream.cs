@@ -117,7 +117,8 @@ internal sealed class SseStream
   /// <param name="writer">The response's event writer.</param>
   /// <param name="afterSeq">Replay events after this sequence number, or -1 to replay nothing.</param>
   /// <param name="cancellationToken">Cancels the attach.</param>
-  internal async ValueTask<SseConnection> AttachAsync(SseWriter writer, long afterSeq, CancellationToken cancellationToken)
+  /// <param name="maxLifetime">When positive, the connection is ended with a <c>retry</c> field after about this long, so the client reconnects; zero keeps it.</param>
+  internal async ValueTask<SseConnection> AttachAsync(SseWriter writer, long afterSeq, CancellationToken cancellationToken, TimeSpan maxLifetime = default)
   {
     var connection = new SseConnection(writer);
     await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -152,9 +153,9 @@ internal sealed class SseStream
       _gate.Release();
     }
 
-    if (_options.KeepAliveInterval > TimeSpan.Zero)
+    if (_options.KeepAliveInterval > TimeSpan.Zero || maxLifetime > TimeSpan.Zero)
     {
-      _ = KeepAliveAsync(connection);
+      _ = KeepAliveAsync(connection, maxLifetime);
     }
 
     return connection;
@@ -229,21 +230,33 @@ internal sealed class SseStream
     }
   }
 
-  private async Task KeepAliveAsync(SseConnection connection)
+  private async Task KeepAliveAsync(SseConnection connection, TimeSpan maxLifetime)
   {
+    var started = _time.GetTimestamp();
+    var interval = _options.KeepAliveInterval > TimeSpan.Zero ? _options.KeepAliveInterval : maxLifetime;
     using var stop = new CancellationTokenSource();
     _ = connection.Closed.ContinueWith(static (_, state) => ((CancellationTokenSource)state!).Cancel(), stop, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     try
     {
       while (!stop.IsCancellationRequested)
       {
-        await Task.Delay(_options.KeepAliveInterval, _time, stop.Token).ConfigureAwait(false);
+        await Task.Delay(interval, _time, stop.Token).ConfigureAwait(false);
         await _gate.WaitAsync(stop.Token).ConfigureAwait(false);
         try
         {
           if (ReferenceEquals(_current, connection))
           {
             using var timeout = new CancellationTokenSource(_options.SseWriteTimeout, _time);
+            if (maxLifetime > TimeSpan.Zero && _time.GetElapsedTime(started) >= maxLifetime)
+            {
+              // Streamable HTTP: the server may end a stream at any time; the retry field tells the client when to resume.
+              // A reader that never reads is dropped here; a live one resumes with Last-Event-ID.
+              await connection.Writer.WriteRetryAsync(1000, timeout.Token).ConfigureAwait(false);
+              connection.Close();
+              _current = null;
+              return;
+            }
+
             await connection.Writer.WriteCommentAsync(timeout.Token).ConfigureAwait(false);
           }
         }
