@@ -102,9 +102,9 @@ revisions do not see it and the tool runs to completion inside the call.
 server.UseTasks(new TaskServerOptions { Store = new FileTaskStore("tasks"), Ttl = TimeSpan.FromHours(1) });
 server.AddTaskTool(definition, async (arguments, task) =>
 {
-    await task.UpdateStatusAsync("indexing");          // shown to pollers
-    var ok = await task.ConfirmAsync("Replace the old index?");   // the task becomes input_required until the client answers
-    return CallToolResult.FromText(ok ? "done" : "kept");
+    await task.SetStatusMessageAsync("indexing");     // shown to pollers
+    var answer = await task.ElicitAsync("replace", "Replace the old index?", schema);   // input_required until the client answers
+    return CallToolResult.FromText(answer.Action == "accept" ? "done" : "kept");
 }, new TaskToolOptions { RequireTasks = false });
 ```
 

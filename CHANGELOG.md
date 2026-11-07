@@ -6,6 +6,7 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
 
 ### Added
 
+- Experimental extensions (`OMCX0001` Tasks, `OMCX0002` Skills, `OMCX0003` Server Cards), off until the host opts in. Tasks: tools that answer with a task handle, `tasks/get`, `tasks/update` and `tasks/cancel`, client polling, and `ITaskStore` with in-memory and file stores. Skills over MCP: `SkillDefinition`, `UseSkills`/`AddSkill`, `skills/list`, `skills/get` and `resources/directory/read` on the server; listing, loading and reading with digest, size and frontmatter verification on the client. Server Cards: published at `<endpoint>/server-card` by the HTTP core, the listener and `MapModelContext`, fetched through the guarded fetcher with AI Catalog discovery. See `docs/extensions.md`.
 - CLI `login` and `logout` for http(s) servers (browser and loopback redirect, tokens in an owner-only file); the other commands use and refresh the stored tokens, and an authorization failure ends with exit code 4 and the challenge summarised, never the token.
 - `RecursiveAI.OneModelContext.EntityFrameworkCore`: `EfAuthorizationStore<TContext>` and `EfTokenStore<TContext>` over your own `DbContext`
   (`modelBuilder.ApplyContextStores()`), for authorization servers and clients that run as several instances. Single-use codes, refresh
