@@ -20,6 +20,9 @@ using SharpFuzz;
 //   Program                    run under libFuzzer (see fuzz/run.sh)
 //   Program replay FILE...     run saved inputs once and print the status each one gets
 //
+// FUZZ_TARGET=sse selects the other target: the event-stream reader the HTTP client uses on responses. Byte 0 picks how many bytes the
+// stream hands over per read, the rest is the stream. It must end, keep every event within the bound, and never throw.
+//
 // Input layout: byte 0 selects the method (POST, GET, DELETE or another); the rest is header lines ("Name: value"), a blank line,
 // then the body. The text "$SESSION" in a header value is replaced by the id of a legacy session created at start-up, so that GET
 // and DELETE reach real state.
@@ -32,17 +35,27 @@ internal static class Program
 
   private static int Main(string[] args)
   {
+    var sse = Environment.GetEnvironmentVariable("FUZZ_TARGET") == "sse";
     if (args.Length > 0 && args[0] == "replay")
     {
       foreach (var file in args.Skip(1))
       {
-        Console.WriteLine(file + ": " + Run(File.ReadAllBytes(file)));
+        var bytes = File.ReadAllBytes(file);
+        Console.WriteLine(file + ": " + (sse ? RunSse(bytes) : Run(bytes)));
       }
 
       return 0;
     }
 
-    Fuzzer.LibFuzzer.Run(span => Run(span));
+    if (sse)
+    {
+      Fuzzer.LibFuzzer.Run(span => RunSse(span));
+    }
+    else
+    {
+      Fuzzer.LibFuzzer.Run(span => Run(span));
+    }
+
     return 0;
   }
 
@@ -67,6 +80,35 @@ internal static class Program
     using var exchange = new FuzzExchange("POST", body, [("Content-Type", "application/json"), ("Accept", "application/json, text/event-stream"), ("Host", "127.0.0.1")]);
     Endpoint.HandleAsync(exchange).AsTask().GetAwaiter().GetResult();
     return exchange.ResponseHeaders.TryGetValue("Mcp-Session-Id", out var id) ? id : "none";
+  }
+
+  internal static int RunSse(ReadOnlySpan<byte> data)
+  {
+    const int Bound = 2048;
+    if (data.Length == 0)
+    {
+      return -1;
+    }
+
+    using var reader = new RecursiveAI.OneModelContext.Sse.SseEventReader(new ChunkedStream(data[1..].ToArray(), (data[0] % 64) + 1), Bound);
+    var events = 0;
+    while (true)
+    {
+      var read = reader.ReadAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
+      if (read.Status != RecursiveAI.OneModelContext.Sse.SseReadStatus.Event)
+      {
+        return events;
+      }
+
+      events++;
+      if (read.Event.Data.Length > Bound)
+      {
+        throw new InvalidOperationException("An event is larger than the bound.");
+      }
+
+      // What the client does with an event: read it as a message. It must classify, never throw.
+      RecursiveAI.OneModelContext.JsonRpc.JsonRpcReader.Read(read.Event.Data);
+    }
   }
 
   internal static int Run(ReadOnlySpan<byte> data)
@@ -166,4 +208,44 @@ internal sealed class FuzzExchange : IHttpExchange, IHttpRequest, IHttpResponse,
     _abort.Dispose();
     _requestBody.Dispose();
   }
+}
+
+/// <summary>A stream that hands out its bytes a few at a time, as a network does.</summary>
+internal sealed class ChunkedStream(byte[] bytes, int chunk) : Stream
+{
+  private int _position;
+
+  public override bool CanRead => true;
+
+  public override bool CanSeek => false;
+
+  public override bool CanWrite => false;
+
+  public override long Length => throw new NotSupportedException();
+
+  public override long Position
+  {
+    get => throw new NotSupportedException();
+    set => throw new NotSupportedException();
+  }
+
+  public override void Flush()
+  {
+  }
+
+  public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+  public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+  {
+    var n = Math.Min(Math.Min(chunk, buffer.Length), bytes.Length - _position);
+    bytes.AsSpan(_position, n).CopyTo(buffer.Span);
+    _position += n;
+    return ValueTask.FromResult(n);
+  }
+
+  public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+  public override void SetLength(long value) => throw new NotSupportedException();
+
+  public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }

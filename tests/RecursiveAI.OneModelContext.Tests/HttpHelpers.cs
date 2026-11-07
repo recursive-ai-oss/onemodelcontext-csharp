@@ -50,6 +50,9 @@ internal sealed class TestExchange : IHttpExchange, IDisposable
 
   internal Task Completed => _running ?? Task.CompletedTask;
 
+  /// <summary>The response body as the client reads it; ends when the endpoint finishes the response.</summary>
+  internal Stream ResponseStream => _responsePipe.Reader.AsStream();
+
   public void Dispose() => _abort.Dispose();
 
   /// <summary>Plays the client hanging up.</summary>

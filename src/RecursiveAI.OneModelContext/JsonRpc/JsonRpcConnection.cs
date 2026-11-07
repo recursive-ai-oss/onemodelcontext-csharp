@@ -41,7 +41,7 @@ public sealed class JsonRpcConnectionOptions
   public Func<JsonRpcNotification, CancellationToken, ValueTask>? NotificationHandler { get; init; }
 
   /// <summary>
-  /// Called when the caller of <see cref="JsonRpcConnection.SendRequestAsync"/> cancels while waiting, so a protocol layer can send its
+  /// Called when the caller of <see cref="JsonRpcConnection.SendRequestAsync(string, JsonElement, CancellationToken)"/> cancels while waiting, so a protocol layer can send its
   /// cancellation notification. Exceptions it throws are ignored.
   /// </summary>
   public Func<JsonRpcId, ValueTask>? OutgoingRequestCancelled { get; init; }
@@ -52,7 +52,7 @@ public sealed class JsonRpcConnectionOptions
   /// <summary>Most incoming requests handled at once; more get error -32000. Default 256.</summary>
   public int MaxConcurrentRequests { get; init; } = 256;
 
-  /// <summary>How long <see cref="JsonRpcConnection.SendRequestAsync"/> waits for a response. Default 5 minutes.</summary>
+  /// <summary>How long <see cref="JsonRpcConnection.SendRequestAsync(string, JsonElement, CancellationToken)"/> waits for a response. Default 5 minutes.</summary>
   public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromMinutes(5);
 
   /// <summary>How long shutdown waits for cancelled handlers to finish. Default 5 seconds.</summary>
@@ -63,6 +63,16 @@ public sealed class JsonRpcConnectionOptions
 
   /// <summary>The clock for timeouts. Default <see cref="TimeProvider.System"/>.</summary>
   public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+}
+
+/// <summary>Per-request settings for <see cref="JsonRpcConnection.SendRequestAsync(string, JsonElement, JsonRpcRequestOptions, CancellationToken)"/>.</summary>
+public sealed class JsonRpcRequestOptions
+{
+  /// <summary>Called with the request's id after it was chosen and before the request is sent, so a caller can match later messages to it.</summary>
+  public Action<JsonRpcId>? IdAssigned { get; init; }
+
+  /// <summary>How long to wait for the response; <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> for no limit. Default: the connection's request timeout.</summary>
+  public TimeSpan? Timeout { get; init; }
 }
 
 /// <summary>
@@ -167,7 +177,26 @@ public sealed class JsonRpcConnection : IAsyncDisposable
   /// <exception cref="JsonRpcClosedException">The connection closed before the response arrived.</exception>
   /// <exception cref="TimeoutException">No response within <see cref="JsonRpcConnectionOptions.RequestTimeout"/>.</exception>
   /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
-  public async ValueTask<JsonElement> SendRequestAsync(string method, JsonElement parameters = default, CancellationToken cancellationToken = default)
+  public ValueTask<JsonElement> SendRequestAsync(string method, JsonElement parameters = default, CancellationToken cancellationToken = default) =>
+    SendRequestCoreAsync(method, parameters, null, _options.RequestTimeout, cancellationToken);
+
+  /// <summary>Sends a request that needs the id the connection chose or a wait other than the connection's default (a long-lived request).</summary>
+  /// <param name="method">The method name.</param>
+  /// <param name="parameters">The params.</param>
+  /// <param name="requestOptions">The id callback and the wait.</param>
+  /// <param name="cancellationToken">Cancels the wait; the peer is then told through <see cref="JsonRpcConnectionOptions.OutgoingRequestCancelled"/>.</param>
+  /// <returns>The result value (a standalone clone).</returns>
+  /// <exception cref="JsonRpcRemoteException">The peer answered with an error.</exception>
+  /// <exception cref="JsonRpcClosedException">The connection closed before the response arrived.</exception>
+  /// <exception cref="TimeoutException">No response within the request's wait.</exception>
+  /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+  public ValueTask<JsonElement> SendRequestAsync(string method, JsonElement parameters, JsonRpcRequestOptions requestOptions, CancellationToken cancellationToken = default)
+  {
+    ArgumentNullException.ThrowIfNull(requestOptions);
+    return SendRequestCoreAsync(method, parameters, requestOptions.IdAssigned, requestOptions.Timeout ?? _options.RequestTimeout, cancellationToken);
+  }
+
+  private async ValueTask<JsonElement> SendRequestCoreAsync(string method, JsonElement parameters, Action<JsonRpcId>? idAssigned, TimeSpan requestTimeout, CancellationToken cancellationToken)
   {
     ArgumentNullException.ThrowIfNull(method);
     if (IsClosed)
@@ -178,7 +207,8 @@ public sealed class JsonRpcConnection : IAsyncDisposable
     var id = JsonRpcId.FromNumber(Interlocked.Increment(ref _nextId));
     var tcs = new TaskCompletionSource<JsonRpcMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
     _pending[id] = tcs;
-    using var timeout = new CancellationTokenSource(_options.RequestTimeout, _options.TimeProvider);
+    idAssigned?.Invoke(id);
+    using var timeout = new CancellationTokenSource(requestTimeout, _options.TimeProvider);
     using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
     try
     {
@@ -190,7 +220,7 @@ public sealed class JsonRpcConnection : IAsyncDisposable
       }
       catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
       {
-        throw new TimeoutException($"No response to '{method}' within {_options.RequestTimeout}.");
+        throw new TimeoutException($"No response to '{method}' within {requestTimeout}.");
       }
 
       return response switch

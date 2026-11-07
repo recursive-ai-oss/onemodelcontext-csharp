@@ -23,7 +23,7 @@ namespace RecursiveAI.OneModelContext;
 /// await ModelContext.ServeAsync(new Greeter());
 /// </code>
 /// </example>
-public static class ModelContext
+public static partial class ModelContext
 {
   /// <summary>Serves a generated tool class over standard input and output until the client disconnects.</summary>
   /// <param name="tools">An instance of a partial class with <see cref="ToolAttribute"/>, <see cref="ResourceAttribute"/> or <see cref="PromptAttribute"/> methods.</param>
