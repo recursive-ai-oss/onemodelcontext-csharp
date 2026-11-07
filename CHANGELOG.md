@@ -4,6 +4,17 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+### Changed
+
+- `AuthorizationServer` hardening: the metadata-document cache evicts instead of switching itself off, with a per-host fetch cap and a short
+  per-host backoff (`MaxFetchesPerHost`, `HostFailureBackoff`); Client Credentials and dynamically registered clients are refused scopes
+  unless a scope allow-list applies; scope strings must be RFC 6749 scope tokens; redirect URIs with control characters, whitespace,
+  backslashes or userinfo are refused and a redirect is never sent without a safe `Location`; `RequireConfidentialClient` defaults to
+  true; the default ID-JAG subject is `issuer#sub`; a spent authorization code is remembered until its refresh family expires
+  (`AuthorizationCodeGrant.FamilyExpiresAt`), in the memory, file and EF stores; the server's own validator requires `typ` `at+jwt`
+  (`JwtTokenValidator.RequireAccessTokenType` for others); client secrets use a salted HMAC-SHA-256 hash (PBKDF2 hashes still verify).
+  `ApplyAuthorizationStore` takes an optional binary collation for `client_id`.
+
 ### Added
 
 - CLI `login` and `logout` for http(s) servers (browser and loopback redirect, tokens in an owner-only file); the other commands use and refresh the stored tokens, and an authorization failure ends with exit code 4 and the challenge summarised, never the token.

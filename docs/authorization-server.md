@@ -52,15 +52,25 @@ configured resource.
 - **PKCE** with S256 is required on every authorization request; `plain` is not offered. The verifier is checked in constant time.
 - **Redirect URIs** are compared character for character against the registration. The one exception is an `http` loopback redirect
   (`127.0.0.1`, `[::1]`, `localhost`), whose port may differ (RFC 8252 section 7.3). A request with an unknown client or an unregistered
-  redirect URI is answered with a plain 400 and never redirected.
+  redirect URI is answered with a plain 400 and never redirected. A redirect URI must be printable ASCII with no whitespace, control
+  character or backslash and no userinfo (`user@`), at registration and in each request; one that cannot be put safely into a `Location`
+  header is an error page, never a bare 302. For a loopback redirect the host and path must match the registration and only the port
+  may differ.
+- **Scopes** are checked as RFC 6749 section 3.3 scope tokens (no quote, backslash, control or non-ASCII character) at every endpoint.
+  Which scopes may be granted is limited by `ScopesSupported` and the client's own `Scopes`. **Set one of them.** With neither, an
+  interactive (authorization code) request is granted any well-formed scope string, which is unsafe, and the server refuses to guess for
+  the grants where a client acts for itself: Client Credentials is refused with `invalid_scope` unless an allow-list applies to the
+  client, and a client registered through the registration endpoint gets no scopes at all unless `ScopesSupported` is set.
 - **`iss`** (RFC 9207) is on every redirect, success and error, next to `state`.
 - **`resource`** is required (one value, one of `Resources`) and becomes the token's `aud`. A different resource at the token endpoint
   is `invalid_target`.
-- **Codes** live 60 seconds, work once, and a second use revokes the tokens the first produced.
+- **Codes** live 60 seconds, work once, and a second use revokes the tokens the first produced. A spent code is remembered until its
+  refresh family expires (`MaxRefreshFamilyLifetime`), so a replay long after the 60 seconds still revokes the family.
 - **Refresh tokens** rotate on every use. Showing a spent one again revokes its whole family: the refresh tokens and the access tokens
   (they carry the family in `sid`; `CreateTokenValidator` checks it). A family also has an absolute lifetime (90 days).
-- **Client secrets** are stored as salted PBKDF2-SHA256 hashes (`ClientSecret.Hash`) and compared in constant time. Codes and refresh
-  tokens are stored as SHA-256 hashes. Nothing secret appears in a log, a diagnostic event, an exception or an error response.
+- **Client secrets** are stored as salted HMAC-SHA-256 hashes (`ClientSecret.Hash`) and compared in constant time. They are meant to be
+  the 256 random bits `ClientSecret.Generate` makes, so a fast hash is enough, and an unauthenticated caller cannot make the server burn
+  CPU on a slow one. Hashes written by earlier versions (PBKDF2) still verify. Codes and refresh tokens are stored as SHA-256 hashes. Nothing secret appears in a log, a diagnostic event, an exception or an error response.
 - **Request limits:** bodies are read to `MaxRequestBodyBytes` (32 KiB) at most, repeated parameters are refused, and a handler fault
   becomes a bare 500.
 - **Cache headers:** token, registration and error responses are `no-store`.
@@ -87,12 +97,16 @@ to an upstream OpenID Connect provider; the result is still your decision to app
 - **Pre-registered:** `store.SaveClientAsync(new RegisteredClient { ... })`. Public clients use `none`; confidential ones
   `client_secret_basic` or `client_secret_post` (a secret hash from `ClientSecret.Hash`; `ClientSecret.Generate` makes a secret) or
   `private_key_jwt` with `JwksJson` or `JwksUri`. `GrantTypes` lists what the client may use (`client_credentials` and the JWT-bearer
-  grant are never implied) and `Scopes` limits what it may be granted.
+  grant are never implied) and `Scopes` limits what it may be granted (Client Credentials needs `Scopes` or the server's `ScopesSupported`).
 - **Client ID Metadata Documents:** a `client_id` that is an HTTPS URL is fetched
   (draft-ietf-oauth-client-id-metadata-document). The document must name itself in `client_id`, list valid redirect URIs, use `none` or
   `private_key_jwt`, and may not carry a secret. A pre-registered client of the same name wins. Fetching is guarded (below). Documents
   are cached per `Cache-Control` (default 5 minutes, at most an hour; `no-store` is honoured), failures for 30 seconds, at most 1000
-  entries, at most 8 fetches in flight.
+  entries (at the limit, expired entries go first, then the one that expires soonest, so junk `client_id`s cannot switch caching off;
+  a URL that can never be fetched takes no entry), at most 8 fetches in flight and 2 per host (`MaxFetchesPerHost`; more are refused
+  at once rather than queued). After a failed fetch a host is left alone for 10 seconds (`HostFailureBackoff`). **Rate-limit `/authorize`
+  and `/token` in the host:** every request with a new metadata-document `client_id` can cost a fetch, and the limits above bound the
+  damage, not the volume.
 - **Dynamic registration** is `[Obsolete]` since the 2026-07-28 revision and off by default. Turn it on only when clients you must
   serve still need it, and rate-limit the endpoint in the host: it accepts anonymous callers and stores what they send.
 
@@ -113,7 +127,12 @@ explicitly: `new AddressPolicy().Allow("127.0.0.1")`, and `AllowHttpToAllowListe
 ## Tokens and keys
 
 Access tokens live 10 minutes by default (`AccessTokenLifetime`) and carry `iss`, `sub`, `aud` (the resource), `client_id`, `scope`, `iat`,
-`nbf`, `exp`, `jti`, and `sid` (the refresh family) next to the host's extra claims. `typ` is `at+jwt`.
+`nbf`, `exp`, `jti`, and `sid` (the refresh family) next to the host's extra claims. `typ` is `at+jwt`; `CreateTokenValidator()` requires it
+(RFC 9068 section 4), and `JwtTokenValidator` does when `RequireAccessTokenType` is set.
+
+**Revocation is honoured only by `CreateTokenValidator()`**, which asks the store. A plain `JwtTokenValidator` over the key set (the
+usual setup for a resource server in another process) accepts a revoked access token until its `exp`, which is why access tokens are
+short. Keep `AccessTokenLifetime` short, or run the resource server in the same process and use `CreateTokenValidator()`.
 
 Signing keys come from you: `JsonWebSigningKey.FromRsa` (RS or PS algorithms, at least 2048 bits) or `FromECDsa` (P-256, P-384, P-521). The
 first key that is not retired signs. **Rotating:** put the new key first in `SigningKeys` and set `RetiredAt` on the old one (restart or
@@ -128,10 +147,13 @@ the Enterprise-Managed Authorization extension) through the JWT-bearer grant. Th
 provider's keys; `aud` is exactly this server's issuer; `client_id` is the authenticated client; `exp`, `iat` and `nbf` are in range and
 the lifetime is at most 10 minutes; `sub` and `jti` are present; then `resource` and `scope` are matched against the request and local
 policy; and last the `jti` is recorded, so an assertion is accepted once, and a request refused for its scope does not spend it. The
-token is audience-restricted to the resolved resource. No refresh token is issued. `ResolveSubject` maps the provider's user to your
-subject (or refuses). EdDSA-signed assertions need the OneCrypto adapter and are refused until then.
+token is audience-restricted to the resolved resource. No refresh token is issued. The client must authenticate
+(`RequireConfidentialClient` defaults to true). The token's subject is the provider's `sub` prefixed with its issuer and `#`
+(`https://idp.example#alice`), because a subject is only unique within its issuer; `ResolveSubject` maps the provider's user to your
+own subject instead (or refuses). EdDSA-signed assertions need the OneCrypto adapter and are refused until then.
 
-Client Credentials needs a pre-registered, authenticated client that lists `client_credentials` in its grant types. `client_secret_basic`,
+Client Credentials needs a pre-registered, authenticated client that lists `client_credentials` in its grant types and a scope
+allow-list (`Scopes` on the client or `ScopesSupported`). `client_secret_basic`,
 `client_secret_post` and `private_key_jwt` work; an assertion is single-use (`jti`), must name this issuer or the token endpoint as
 `aud`, and must expire within ten minutes.
 
@@ -140,7 +162,9 @@ Client Credentials needs a pre-registered, authenticated client that lists `clie
 `IAuthorizationStore` holds clients, codes, refresh tokens, revocations and used assertion ids. Each method is one atomic step with no
 shared object identity, so a database implementation needs a row or a unique key per record. `MemoryAuthorizationStore` (one process,
 lost on restart) and `FileAuthorizationStore` (one JSON file, written atomically, owner-only on Unix, hashes only; one process) ship in
-the core. Multi-instance hosts need a database store.
+the core. Multi-instance hosts need a database store. `EfAuthorizationStore` compares `client_id` exactly after the lookup; pass a binary
+collation for the key column to `ApplyAuthorizationStore(clientIdCollation: ...)` (for example `Latin1_General_100_BIN2` on SQL Server,
+`BINARY` on SQLite, `C` on PostgreSQL) so that ids differing only in case cannot collide as keys either.
 
 ## Not provided
 
