@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -121,6 +122,24 @@ public sealed class StreamableHttpEndpoint : IDisposable
       return;
     }
 
+    if (_options.ResourceServer is { } resourceServer)
+    {
+      if (call.Request.Method == "GET" && resourceServer.IsMetadataPath(call.Request.Path))
+      {
+        await WriteMetadataAsync(call, resourceServer).ConfigureAwait(false);
+        return;
+      }
+
+      if (!await AuthenticateAsync(call, resourceServer).ConfigureAwait(false))
+      {
+        return;
+      }
+    }
+    else
+    {
+      call.User = call.Exchange.User;
+    }
+
     switch (call.Request.Method)
     {
       case "POST":
@@ -137,6 +156,116 @@ public sealed class StreamableHttpEndpoint : IDisposable
         await WriteErrorAsync(call, 405, JsonRpcErrorCodes.InvalidRequest, "Method not allowed.").ConfigureAwait(false);
         break;
     }
+  }
+
+  // ---- Authorization (resource server) --------------------------------------------------------------------------------------
+
+  private static async ValueTask WriteMetadataAsync(Call call, Auth.ResourceServer resourceServer)
+  {
+    // RFC 9728 section 3.2: a plain 200 JSON document. It is public by design, so browser-based clients may read it (CORS).
+    call.Response.StatusCode = 200;
+    call.Response.SetHeader("Content-Type", "application/json");
+    call.Response.SetHeader("Cache-Control", "public, max-age=3600");
+    call.Response.SetHeader("Access-Control-Allow-Origin", "*");
+    call.ResponseStarted = true;
+    await call.Response.Body.WriteAsync(resourceServer.MetadataDocument, call.Exchange.Aborted).ConfigureAwait(false);
+    await call.Response.Body.FlushAsync(call.Exchange.Aborted).ConfigureAwait(false);
+  }
+
+  private static async ValueTask<bool> AuthenticateAsync(Call call, Auth.ResourceServer resourceServer)
+  {
+    Auth.AuthenticationOutcome outcome;
+    if (call.Exchange.User is { } hostUser)
+    {
+      // The host (for example the ASP.NET Core authentication handler) authenticated the caller already; only scopes remain.
+      outcome = resourceServer.Authorize(hostUser, resourceServer.Options.RequiredScopes);
+    }
+    else
+    {
+      outcome = await resourceServer.AuthenticateAsync(call.Request.Headers.GetAll("Authorization"), call.Exchange.Aborted).ConfigureAwait(false);
+    }
+
+    if (outcome.Succeeded)
+    {
+      call.User = outcome.Principal;
+      return true;
+    }
+
+    await WriteChallengeAsync(call, outcome).ConfigureAwait(false);
+    return false;
+  }
+
+  private static ValueTask WriteChallengeAsync(Call call, Auth.AuthenticationOutcome outcome)
+  {
+    if (outcome.WwwAuthenticate is { Length: > 0 } challenge)
+    {
+      call.Response.SetHeader("WWW-Authenticate", challenge);
+    }
+
+    call.Response.SetHeader("Cache-Control", "no-store");
+    return WriteErrorAsync(call, outcome.StatusCode, JsonRpcErrorCodes.InvalidRequest, outcome.Description ?? "Unauthorized: a bearer token is required.");
+  }
+
+  /// <summary>Scopes a request needs because of what it addresses; null for none. Unknown names fall through to the normal error.</summary>
+  private IReadOnlyList<string>? ScopesFor(string method, JsonElement parameters)
+  {
+    if (parameters.ValueKind != JsonValueKind.Object)
+    {
+      return null;
+    }
+
+    switch (method)
+    {
+      case Methods.ToolsCall:
+        return parameters.TryGetProperty("name", out var tool) && tool.ValueKind == JsonValueKind.String && _server.Tools.TryGet(tool.GetString()!, out var toolDefinition, out _)
+          ? toolDefinition.RequiredScopes
+          : null;
+      case Methods.PromptsGet:
+        return parameters.TryGetProperty("name", out var prompt) && prompt.ValueKind == JsonValueKind.String && _server.Prompts.TryGet(prompt.GetString()!, out var promptDefinition, out _)
+          ? promptDefinition.RequiredScopes
+          : null;
+      case Methods.ResourcesRead:
+      case Methods.ResourcesSubscribe:
+        if (!parameters.TryGetProperty("uri", out var uriElement) || uriElement.ValueKind != JsonValueKind.String || uriElement.GetString() is not { } uri)
+        {
+          return null;
+        }
+
+        if (_server.Resources.TryGet(uri, out var resourceDefinition, out _))
+        {
+          return resourceDefinition.RequiredScopes;
+        }
+
+        foreach (var template in _server.ResourceTemplates.Definitions)
+        {
+          if (UriTemplateMatcher.TryMatch(template.UriTemplate, uri, out _))
+          {
+            return template.RequiredScopes;
+          }
+        }
+
+        return null;
+      default:
+        return null;
+    }
+  }
+
+  /// <summary>Applies the scope requirements of one request. Returns false after answering 403.</summary>
+  private async ValueTask<bool> AuthorizeAsync(Call call, string method, JsonElement parameters)
+  {
+    if (_options.ResourceServer is not { } resourceServer || call.User is not { } user || ScopesFor(method, parameters) is not { Count: > 0 } required)
+    {
+      return true;
+    }
+
+    var outcome = resourceServer.Authorize(user, required);
+    if (outcome.Succeeded)
+    {
+      return true;
+    }
+
+    await WriteChallengeAsync(call, outcome).ConfigureAwait(false);
+    return false;
   }
 
   // ---- Host and Origin -------------------------------------------------------------------------------------------------------
@@ -310,6 +439,11 @@ public sealed class StreamableHttpEndpoint : IDisposable
 
   private async ValueTask PostRequestAsync(Call call, JsonRpcRequest rpcRequest, bool acceptsSse)
   {
+    if (!await AuthorizeAsync(call, rpcRequest.Method, rpcRequest.Params).ConfigureAwait(false))
+    {
+      return;
+    }
+
     var sessionHeader = call.Request.Headers.GetFirst(WireNames.HeaderSessionId);
 
     // 2026-07-28 Streamable HTTP, "Protocol Version Header": a method the server does not implement is 404 with -32601. The handshake was
@@ -345,7 +479,7 @@ public sealed class StreamableHttpEndpoint : IDisposable
         return;
       }
 
-      session = new HttpSession(_options, _time, _server.Options.RequestTimeout);
+      session = new HttpSession(_options, _time, _server.Options.RequestTimeout) { Owner = SubjectOf(call.User) };
       created = true;
       state = session.State;
     }
@@ -355,7 +489,7 @@ public sealed class StreamableHttpEndpoint : IDisposable
       await WriteErrorAsync(call, 400, JsonRpcErrorCodes.InvalidRequest, "Bad request: the Mcp-Session-Id header is required.", rpcRequest.Id).ConfigureAwait(false);
       return;
     }
-    else if (!_sessions.TryGetValue(sessionHeader, out session))
+    else if (!TryGetSession(call, sessionHeader, out session))
     {
       await WriteErrorAsync(call, 404, JsonRpcErrorCodes.InvalidRequest, "Not found: the session does not exist or has ended.", rpcRequest.Id).ConfigureAwait(false);
       return;
@@ -398,7 +532,7 @@ public sealed class StreamableHttpEndpoint : IDisposable
       {
         using (HttpRequestScope.Enter(new HttpRequestScope(call.Exchange, channel.CloseConnectionAsync)))
         {
-          response = await _server.DispatchRequestAsync(rpcRequest, state, channel, call.Exchange.User, session is not null, handlerCts.Token).ConfigureAwait(false);
+          response = await _server.DispatchRequestAsync(rpcRequest, state, channel, call.User, session is not null, handlerCts.Token).ConfigureAwait(false);
         }
 
         if (created && response is JsonRpcResultResponse && session is not null)
@@ -471,7 +605,7 @@ public sealed class StreamableHttpEndpoint : IDisposable
       await WriteErrorAsync(call, 400, JsonRpcErrorCodes.InvalidRequest, "Bad request: the Mcp-Session-Id header is required.").ConfigureAwait(false);
       return;
     }
-    else if (!_sessions.TryGetValue(sessionHeader, out var session))
+    else if (!TryGetSession(call, sessionHeader, out var session))
     {
       await WriteErrorAsync(call, 404, JsonRpcErrorCodes.InvalidRequest, "Not found: the session does not exist or has ended.").ConfigureAwait(false);
       return;
@@ -504,7 +638,7 @@ public sealed class StreamableHttpEndpoint : IDisposable
       return;
     }
 
-    if (!_sessions.TryGetValue(sessionHeader, out var session))
+    if (!TryGetSession(call, sessionHeader, out var session))
     {
       await WriteErrorAsync(call, 404, JsonRpcErrorCodes.InvalidRequest, "Not found: the session does not exist or has ended.").ConfigureAwait(false);
       return;
@@ -524,14 +658,19 @@ public sealed class StreamableHttpEndpoint : IDisposable
   private async ValueTask PostBatchAsync(Call call, ReadOnlyMemory<byte> body)
   {
     var sessionHeader = call.Request.Headers.GetFirst(WireNames.HeaderSessionId);
-    if (sessionHeader is null || !_sessions.TryGetValue(sessionHeader, out var session))
+    if (sessionHeader is null || !TryGetSession(call, sessionHeader, out var session))
     {
       await WriteErrorAsync(call, sessionHeader is null ? 400 : 404, JsonRpcErrorCodes.InvalidRequest, "Invalid request: batches need a session.").ConfigureAwait(false);
       return;
     }
 
+    if (_options.ResourceServer is not null && !await AuthorizeBatchAsync(call, body).ConfigureAwait(false))
+    {
+      return;
+    }
+
     session.Touch();
-    var answer = await _server.HandleMessageAsync(Encoding.UTF8.GetString(body.Span), session.State, sink: null, call.Exchange.User, call.Exchange.Aborted).ConfigureAwait(false);
+    var answer = await _server.HandleMessageAsync(Encoding.UTF8.GetString(body.Span), session.State, sink: null, call.User, call.Exchange.Aborted).ConfigureAwait(false);
     if (answer is null)
     {
       await WriteAcceptedAsync(call).ConfigureAwait(false);
@@ -539,6 +678,47 @@ public sealed class StreamableHttpEndpoint : IDisposable
     }
 
     await WriteBytesAsync(call, answer.StartsWith('[') ? 200 : 400, Encoding.UTF8.GetBytes(answer)).ConfigureAwait(false);
+  }
+
+  // A legacy session belongs to the caller that created it: with authentication on, another caller who learns the id gets the same
+  // answer as for an id that does not exist (2025-11-25 Security Best Practices, session hijacking).
+  private bool TryGetSession(Call call, string id, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out HttpSession? session)
+  {
+    if (_sessions.TryGetValue(id, out session) && (session.Owner is null || string.Equals(session.Owner, SubjectOf(call.User), StringComparison.Ordinal)))
+    {
+      return true;
+    }
+
+    session = null;
+    return false;
+  }
+
+  private static string? SubjectOf(ClaimsPrincipal? user) =>
+    user is null ? null : (user.FindFirst(Auth.AuthClaimTypes.Subject) ?? user.FindFirst(ClaimTypes.NameIdentifier))?.Value;
+
+  // A batch is authorized as a whole: one request without its scopes refuses all of them.
+  private async ValueTask<bool> AuthorizeBatchAsync(Call call, ReadOnlyMemory<byte> body)
+  {
+    try
+    {
+      using var document = JsonDocument.Parse(body, new JsonDocumentOptions { MaxDepth = 32 });
+      foreach (var item in document.RootElement.EnumerateArray())
+      {
+        if (item.ValueKind == JsonValueKind.Object
+          && item.TryGetProperty("method", out var method) && method.ValueKind == JsonValueKind.String
+          && item.TryGetProperty("params", out var parameters)
+          && !await AuthorizeAsync(call, method.GetString()!, parameters).ConfigureAwait(false))
+        {
+          return false;
+        }
+      }
+    }
+    catch (JsonException)
+    {
+      // The reader accepted this body as a batch already; the server answers any problem in it.
+    }
+
+    return true;
   }
 
   // ---- GET and DELETE (legacy sessions) -------------------------------------------------------------------------------------
@@ -554,7 +734,7 @@ public sealed class StreamableHttpEndpoint : IDisposable
       return;
     }
 
-    if (!_sessions.TryGetValue(sessionHeader, out var session))
+    if (!TryGetSession(call, sessionHeader, out var session))
     {
       await WriteErrorAsync(call, 404, JsonRpcErrorCodes.InvalidRequest, "Not found: the session does not exist or has ended.").ConfigureAwait(false);
       return;
@@ -616,7 +796,8 @@ public sealed class StreamableHttpEndpoint : IDisposable
       return;
     }
 
-    if (!_sessions.TryRemove(sessionHeader, out var session))
+    // Only the session's owner may end it.
+    if (!TryGetSession(call, sessionHeader, out _) || !_sessions.TryRemove(sessionHeader, out var session))
     {
       await WriteErrorAsync(call, 404, JsonRpcErrorCodes.InvalidRequest, "Not found: the session does not exist or has ended.").ConfigureAwait(false);
       return;
@@ -856,6 +1037,9 @@ public sealed class StreamableHttpEndpoint : IDisposable
     internal IHttpResponse Response => Exchange.Response;
 
     internal bool ResponseStarted { get; set; }
+
+    /// <summary>The caller after authentication: the host's, or the one this endpoint validated from the bearer token.</summary>
+    internal ClaimsPrincipal? User { get; set; }
   }
 
   /// <summary>

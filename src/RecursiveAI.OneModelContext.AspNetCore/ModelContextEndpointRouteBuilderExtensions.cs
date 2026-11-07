@@ -1,10 +1,12 @@
 using System;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using RecursiveAI.OneModelContext.Auth;
 using RecursiveAI.OneModelContext.Diagnostics;
 using RecursiveAI.OneModelContext.Hosting;
 
@@ -55,6 +57,12 @@ public static class ModelContextEndpointRouteBuilderExtensions
       s_logBridges.GetValue(factory, static f => ContextDiagnostics.Subscribe(CreateBridge(f.CreateLogger("RecursiveAI.OneModelContext"))));
     }
 
+    // The protected resource metadata is public by design (RFC 9728), so it is mapped beside the endpoint and outside its authorization.
+    if (options?.ResourceServer is { } resourceServer)
+    {
+      endpoints.MapProtectedResourceMetadata(resourceServer, endpoint);
+    }
+
     return endpoints.Map(pattern, async context => await endpoint.HandleAsync(new AspNetCoreExchange(context)).ConfigureAwait(false));
   }
 
@@ -68,9 +76,28 @@ public static class ModelContextEndpointRouteBuilderExtensions
     var write = e.Kind switch
     {
       DiagnosticKind.HandlerFault or DiagnosticKind.AuditFault => s_error,
-      DiagnosticKind.InvalidMessage => s_warning,
+      DiagnosticKind.InvalidMessage or DiagnosticKind.AuthRejected => s_warning,
       _ => s_debug,
     };
     write(logger, e.Kind, e.Message, e.Method, e.Exception);
   };
+
+  /// <summary>
+  /// Maps the protected resource metadata document (RFC 9728) of <paramref name="resourceServer"/> at its well-known paths. <see cref="MapModelContext"/>
+  /// does this itself when <see cref="StreamableHttpOptions.ResourceServer"/> is set; call this only for a resource server served by your own handler.
+  /// The routes are anonymous: clients read the document before they have a token.
+  /// </summary>
+  /// <param name="endpoints">The route builder.</param>
+  /// <param name="resourceServer">The resource server whose document to serve.</param>
+  /// <param name="endpoint">The endpoint that answers the document; null builds a private one with the default options and this resource server.</param>
+  public static void MapProtectedResourceMetadata(this IEndpointRouteBuilder endpoints, ResourceServer resourceServer, StreamableHttpEndpoint? endpoint = null)
+  {
+    ArgumentNullException.ThrowIfNull(endpoints);
+    ArgumentNullException.ThrowIfNull(resourceServer);
+    var handler = endpoint ?? new StreamableHttpEndpoint(new ContextServer("metadata", "1"), new StreamableHttpOptions { ResourceServer = resourceServer });
+    foreach (var path in new[] { resourceServer.PathInsertedMetadataPath, ResourceServer.RootMetadataPath }.Distinct(StringComparer.Ordinal))
+    {
+      endpoints.MapGet(path, async context => await handler.HandleAsync(new AspNetCoreExchange(context)).ConfigureAwait(false)).AllowAnonymous();
+    }
+  }
 }
