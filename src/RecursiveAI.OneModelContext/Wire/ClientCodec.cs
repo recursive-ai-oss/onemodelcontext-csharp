@@ -137,6 +137,14 @@ public static class ResultTypes
         return result.Deserialize(WireJsonContext.Default.InputRequiredResult) ?? throw new JsonException("null result");
       }
 
+      // Tasks extension, "Polymorphic Results": a tools/call answered with resultType "task" is a task handle, not a CallToolResult.
+      if (method == Methods.ToolsCall && result.ValueKind == JsonValueKind.Object
+        && result.TryGetProperty("resultType", out var kind) && kind.ValueKind == JsonValueKind.String
+        && kind.GetString() == Extensions.Tasks.TasksExtension.TaskResultType)
+      {
+        return result.Deserialize(WireJsonContext.Default.ExtensionResult) ?? throw new JsonException("null result");
+      }
+
       var context = WireJsonContext.Default;
       Result? decoded = method switch
       {

@@ -73,6 +73,14 @@ internal sealed class ServerFeatures(ContextServer server)
   {
     if (!context.SupportsExtension(registration.Id))
     {
+      // An extension that insists on being declared answers -32021 on the revisions it works on; elsewhere the method does not exist.
+      if (registration.UndeclaredRequestsFail && registration.SupportsRevision(context.ProtocolVersion))
+      {
+        throw new MissingCapabilityException(
+          "The extension '" + registration.Id + "' is required for " + method + ".",
+          new ClientCapabilities { Extensions = new Dictionary<string, JsonElement> { [registration.Id] = ContextServer.EmptyObject } });
+      }
+
       throw new ProtocolException(JsonRpcErrorCodes.MethodNotFound, "Method not found: " + method + ".");
     }
 
@@ -269,7 +277,7 @@ internal sealed class ServerFeatures(ContextServer server)
     return page;
   }
 
-  private async ValueTask<CallToolResult> CallToolAsync(CallToolRequestParams request, RequestContext context)
+  private async ValueTask<Result> CallToolAsync(CallToolRequestParams request, RequestContext context)
   {
     if (!server.Tools.TryGet(request.Name, out var definition, out var handler)
       || (server.Extensions.HasToolAdapters && server.Extensions.AdaptTool(definition.ToTool(), context) is null))
@@ -288,6 +296,12 @@ internal sealed class ServerFeatures(ContextServer server)
     CallToolResult result;
     try
     {
+      if (server.Extensions.HasToolCallInterceptors
+        && await server.Extensions.InterceptToolCallAsync(request.Name, arguments, handler, context).ConfigureAwait(false) is { } taken)
+      {
+        return taken;
+      }
+
       result = await handler(arguments, context).ConfigureAwait(false);
     }
     catch (ToolException failure)

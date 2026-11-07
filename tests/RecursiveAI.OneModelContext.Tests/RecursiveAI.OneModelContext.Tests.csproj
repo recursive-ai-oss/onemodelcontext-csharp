@@ -7,7 +7,7 @@
     <IsTestProject>true</IsTestProject>
     <RootNamespace>RecursiveAI.OneModelContext.Tests</RootNamespace>
     <!-- These tests exercise Sampling, Roots and Logging on purpose. -->
-    <NoWarn>$(NoWarn);OMC0001;OMC0002;OMC0003;OMC0004</NoWarn>
+    <NoWarn>$(NoWarn);OMC0001;OMC0002;OMC0003;OMC0004;OMCX0001;OMCX0002;OMCX0003</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
