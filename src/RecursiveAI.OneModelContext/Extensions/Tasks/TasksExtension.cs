@@ -96,6 +96,14 @@ public sealed class TaskToolOptions
   /// <c>false</c>: such a caller gets the tool run to completion inside the call.
   /// </summary>
   public bool RequireTasks { get; init; }
+
+  /// <summary>
+  /// Runs inside the call before the task is created, with the request's context: ask the user for what the work needs
+  /// (<see cref="RequestContext.ElicitAsync(string, System.Text.Json.JsonElement, string?)"/> works as in any tool, and the call is retried with the answers
+  /// on 2026-07-28), check the arguments, or refuse. Whatever it returns becomes the arguments the work receives. Default none: the work
+  /// receives the arguments of the call. The task exists only after this returns, as the extension asks for input needed before a task.
+  /// </summary>
+  public Func<JsonElement, RequestContext, ValueTask<JsonElement>>? Prepare { get; init; }
 }
 
 /// <summary>
@@ -109,13 +117,14 @@ public sealed class TaskContext
   private readonly Running? _run;
   private readonly RequestContext? _inline;
 
-  internal TaskContext(TaskService service, Running run, string taskId, ClaimsPrincipal? principal, Implementation? clientInfo)
+  internal TaskContext(TaskService service, Running run, string taskId, ClaimsPrincipal? principal, Implementation? clientInfo, ClientCapabilities capabilities)
   {
     _service = service;
     _run = run;
     TaskId = taskId;
     Principal = principal;
     ClientInfo = clientInfo;
+    Capabilities = capabilities;
     CancellationToken = run.Token;
   }
 
@@ -126,6 +135,8 @@ public sealed class TaskContext
     ClientInfo = inline.ClientInfo;
     CancellationToken = inline.CancellationToken;
   }
+
+  internal ClientCapabilities Capabilities { get; } = new();
 
   /// <summary>The task's id, or <c>null</c> when the work runs inside the call because the caller does not understand tasks.</summary>
   public string? TaskId { get; }
@@ -199,7 +210,7 @@ public sealed class TaskContext
       throw new NotSupportedException("This call runs without a task; only ElicitAsync can ask the client for input.");
     }
 
-    return _service.RequestInputAsync(_run!, inputKey, method, parameters);
+    return _service.RequestInputAsync(_run!, Capabilities, inputKey, method, parameters);
   }
 }
 
@@ -259,7 +270,16 @@ public static class TasksServerExtensions
     }
 
     service!.AddTool(definition.Name, handler, options ?? new TaskToolOptions());
-    server.Tools.Add(definition, (arguments, context) => TaskService.RunInlineAsync(handler, arguments, context));
+    var prepare = options?.Prepare;
+    server.Tools.Add(definition, async (arguments, context) =>
+    {
+      if (prepare is not null)
+      {
+        arguments = await prepare(arguments, context).ConfigureAwait(false);
+      }
+
+      return await TaskService.RunInlineAsync(handler, arguments, context).ConfigureAwait(false);
+    });
     return server;
   }
 }

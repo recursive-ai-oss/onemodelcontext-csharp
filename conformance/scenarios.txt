@@ -77,6 +77,17 @@ server json-schema-2020-12 2026-07-28
 server http-header-validation 2026-07-28
 server http-custom-header-server-validation 2026-07-28
 
+# Tasks extension (Beta): the suite runs these only when forced, which the "extension" revision asks for.
+server tasks-lifecycle extension
+server tasks-capability-negotiation extension
+server tasks-wire-fields extension
+server tasks-request-state-removal extension
+server tasks-mrtr-input extension
+server tasks-request-headers extension
+server tasks-dispatch-and-envelope extension
+server tasks-required-task-error extension
+server tasks-mrtr-composition extension
+
 # Client authorization scenarios (our conformance client).
 client auth/metadata-default 2026-07-28
 client auth/metadata-var1 2026-07-28

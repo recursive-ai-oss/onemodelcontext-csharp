@@ -137,6 +137,11 @@ internal sealed class TaskService
       return CallToolResult.FromError("The server is running as many tasks as it allows. Try again later.");
     }
 
+    if (entry.Options.Prepare is { } prepare)
+    {
+      arguments = await prepare(arguments, context).ConfigureAwait(false);
+    }
+
     await SweepAsync(context.CancellationToken).ConfigureAwait(false);
     var now = _time.GetUtcNow();
     var record = new TaskRecord
@@ -166,7 +171,7 @@ internal sealed class TaskService
     Interlocked.Increment(ref _runningCount);
 
     // The work outlives the request: it gets copies of what it needs and never touches the request's context again.
-    var task = new TaskContext(this, run, record.TaskId, context.Principal, context.ClientInfo);
+    var task = new TaskContext(this, run, record.TaskId, context.Principal, context.ClientInfo, context.ClientCapabilities);
     var cloned = arguments.Clone();
     _ = Task.Run(() => RunAsync(entry.Handler, cloned, task, run), CancellationToken.None);
     return ToResult(record, TasksExtension.TaskResultType);
@@ -328,8 +333,21 @@ internal sealed class TaskService
 
   // ---- input requests ----
 
-  internal async ValueTask<JsonElement> RequestInputAsync(Running run, string key, string method, JsonElement parameters)
+  internal async ValueTask<JsonElement> RequestInputAsync(Running run, ClientCapabilities capabilities, string key, string method, JsonElement parameters)
   {
+    // Only ask for what the client said it can answer, as for any server-to-client request.
+    var needed = method switch
+    {
+      Methods.ElicitationCreate when capabilities.Elicitation is null => new ClientCapabilities { Elicitation = new ElicitationCapability() },
+      Methods.SamplingCreateMessage when capabilities.Sampling is null => new ClientCapabilities { Sampling = new SamplingCapability() },
+      Methods.RootsList when capabilities.Roots is null => new ClientCapabilities { Roots = new RootsCapability() },
+      _ => null,
+    };
+    if (needed is not null)
+    {
+      throw new MissingCapabilityException("The client did not declare the capability for " + method + ".", needed);
+    }
+
     var request = JsonSerializer.Serialize(
       new InputRequest { Method = method, Params = parameters.ValueKind == JsonValueKind.Undefined ? default : parameters },
       WireJsonContext.Default.InputRequest);
