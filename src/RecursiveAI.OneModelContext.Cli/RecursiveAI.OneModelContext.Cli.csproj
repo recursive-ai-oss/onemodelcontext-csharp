@@ -14,6 +14,18 @@
     <Description>The onemodelcontext command line tool for OneModelContext: a .NET SDK for the Model Context Protocol®. Pre-release; unpublished.</Description>
   </PropertyGroup>
 
+  <!-- Pass -p:SmokeMode=aot to publish a native executable. It is a project property, not PublishAot itself, because a global
+       property would flow into the generator project, which cannot be published natively. -->
+  <PropertyGroup Condition="'$(SmokeMode)' == 'aot'">
+    <PublishAot>true</PublishAot>
+    <PackAsTool>false</PackAsTool>
+    <RuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="RecursiveAI.OneModelContext.CliTests" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="../RecursiveAI.OneModelContext/RecursiveAI.OneModelContext.csproj" />
   </ItemGroup>
