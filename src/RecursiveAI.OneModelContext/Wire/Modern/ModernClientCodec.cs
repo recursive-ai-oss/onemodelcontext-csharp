@@ -78,17 +78,33 @@ internal sealed class ModernClientCodec : IClientCodec
     };
   }
 
+  // The identity members of _meta are the same for every request of a client, so they are serialized once per client and version.
+  private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ClientHello, IdentityCache> Identities = new();
+
+  private sealed record IdentityCache(string Version, byte[] Members);
+
   public JsonElement EncodeParams(ClientSession session, ClientHello hello, string method, RequestParams? parameters)
   {
-    var serialized = default(JsonElement);
-    if (parameters is not null)
+    if (!Identities.TryGetValue(hello, out var identity) || identity.Version != session.ProtocolVersion)
     {
-      var info = WireJsonContext.Default.GetTypeInfo(parameters.GetType())
-        ?? throw new InvalidOperationException("The parameter type " + parameters.GetType().Name + " is not a protocol record.");
-      serialized = JsonSerializer.SerializeToElement(parameters, info);
+      identity = new IdentityCache(session.ProtocolVersion, ModernEnvelope.IdentityMembers(session.ProtocolVersion, hello.ClientInfo, hello.Capabilities));
+      Identities.AddOrUpdate(hello, identity);
     }
 
-    return ModernEnvelope.WrapParams(serialized, session.ProtocolVersion, hello.ClientInfo, hello.Capabilities);
+    if (parameters is null)
+    {
+      return ModernEnvelope.WrapSerializedParams("{}"u8, session.ProtocolVersion, hello.ClientInfo, hello.Capabilities, identity.Members);
+    }
+
+    var info = WireJsonContext.Default.GetTypeInfo(parameters.GetType())
+      ?? throw new InvalidOperationException("The parameter type " + parameters.GetType().Name + " is not a protocol record.");
+    var bytes = new System.Buffers.ArrayBufferWriter<byte>(256);
+    using (var writer = new Utf8JsonWriter(bytes))
+    {
+      JsonSerializer.Serialize(writer, parameters, info);
+    }
+
+    return ModernEnvelope.WrapSerializedParams(bytes.WrittenSpan, session.ProtocolVersion, hello.ClientInfo, hello.Capabilities, identity.Members);
   }
 
   // 2026-07-28 basic/versioning: an absent resultType is read as complete, which ResultTypes.Decode does by treating every result

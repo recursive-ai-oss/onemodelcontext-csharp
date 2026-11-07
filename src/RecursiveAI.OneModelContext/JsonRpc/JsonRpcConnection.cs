@@ -211,14 +211,17 @@ public sealed class JsonRpcConnection : IAsyncDisposable
     _pending[id] = tcs;
     idAssigned?.Invoke(id);
     using var timeout = new CancellationTokenSource(requestTimeout, _options.TimeProvider);
-    using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+
+    // A caller that cannot cancel needs only the timeout's token; a second source would just add registrations and allocations.
+    using var linkedSource = cancellationToken.CanBeCanceled ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token) : null;
+    var linked = linkedSource?.Token ?? timeout.Token;
     try
     {
-      await WriteAsync(new JsonRpcRequest(id, method, parameters), linked.Token).ConfigureAwait(false);
+      await WriteAsync(new JsonRpcRequest(id, method, parameters), linked).ConfigureAwait(false);
       JsonRpcMessage response;
       try
       {
-        response = await tcs.Task.WaitAsync(linked.Token).ConfigureAwait(false);
+        response = await tcs.Task.WaitAsync(linked).ConfigureAwait(false);
       }
       catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
       {

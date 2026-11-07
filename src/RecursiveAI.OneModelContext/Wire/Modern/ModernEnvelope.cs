@@ -151,6 +151,114 @@ internal static class ModernEnvelope
     return JsonDocument.Parse(buffer.WrittenMemory).RootElement;
   }
 
+  /// <summary>
+  /// The same as <see cref="WrapParams(JsonElement, string, Implementation, ClientCapabilities)"/> for params that are already UTF-8 JSON, with
+  /// the identity members serialized once (<paramref name="identity"/>, see <see cref="IdentityMembers"/>). Params without their own
+  /// <c>_meta</c> (the usual case) are not parsed or copied member by member: the envelope is written in front of their bytes.
+  /// </summary>
+  internal static JsonElement WrapSerializedParams(ReadOnlySpan<byte> serialized, string version, Implementation clientInfo, ClientCapabilities capabilities, ReadOnlySpan<byte> identity)
+  {
+    // Params with their own _meta, and calls made inside a trace (the trace context joins _meta), take the general path.
+    if (HasTopLevel(serialized, "_meta"u8, default) || serialized.Length < 2 || serialized[0] != (byte)'{' || Diagnostics.TraceContext.TryGetCurrent(out _, out _))
+    {
+      return WrapParams(serialized.IsEmpty ? default : JsonDocument.Parse(serialized.ToArray()).RootElement, version, clientInfo, capabilities);
+    }
+
+    var buffer = new ArrayBufferWriter<byte>(identity.Length + serialized.Length + 96);
+    buffer.Write("{\"_meta\":{"u8);
+    buffer.Write(identity);
+    buffer.Write("}"u8);
+    if (serialized.Length > 2)
+    {
+      buffer.Write(","u8);
+    }
+
+    buffer.Write(serialized[1..]);
+    return JsonDocument.Parse(buffer.WrittenMemory).RootElement;
+  }
+
+  /// <summary>
+  /// The same as <see cref="WrapResult"/> for a result that is already UTF-8 JSON and not cacheable. A result without its own
+  /// <c>resultType</c> or <c>_meta</c> (the usual case) is not parsed member by member: the envelope is written in front of its bytes.
+  /// </summary>
+  internal static JsonElement WrapSerializedResult(ReadOnlySpan<byte> serialized, Implementation serverInfo, bool cacheable, long ttlMs, string cacheScope, ReadOnlySpan<byte> serverInfoMember)
+  {
+    if (cacheable || serialized.Length < 2 || serialized[0] != (byte)'{' || HasTopLevel(serialized, "resultType"u8, "_meta"u8))
+    {
+      return WrapResult(JsonDocument.Parse(serialized.ToArray()).RootElement, serverInfo, cacheable, ttlMs, cacheScope);
+    }
+
+    var buffer = new ArrayBufferWriter<byte>(serverInfoMember.Length + serialized.Length + 64);
+    buffer.Write("{\"resultType\":\"complete\",\"_meta\":{"u8);
+    buffer.Write(serverInfoMember);
+    buffer.Write("}"u8);
+    if (serialized.Length > 2)
+    {
+      buffer.Write(","u8);
+    }
+
+    buffer.Write(serialized[1..]);
+    return JsonDocument.Parse(buffer.WrittenMemory).RootElement;
+  }
+
+  /// <summary>The <c>serverInfo</c> member of a result's <c>_meta</c>, as UTF-8 JSON.</summary>
+  internal static byte[] ServerInfoMember(Implementation serverInfo)
+  {
+    var buffer = new ArrayBufferWriter<byte>(128);
+    using (var writer = new Utf8JsonWriter(buffer))
+    {
+      writer.WriteStartObject();
+      WriteServerInfo(writer, serverInfo);
+      writer.WriteEndObject();
+    }
+
+    return buffer.WrittenSpan[1..^1].ToArray();
+  }
+
+  /// <summary>The members every request carries in <c>_meta</c>: version, client identity and capabilities, as UTF-8 JSON members.</summary>
+  internal static byte[] IdentityMembers(string version, Implementation clientInfo, ClientCapabilities capabilities)
+  {
+    var buffer = new ArrayBufferWriter<byte>(256);
+    using (var writer = new Utf8JsonWriter(buffer))
+    {
+      writer.WriteStartObject();
+      writer.WriteString(WireNames.MetaProtocolVersion, version);
+      writer.WritePropertyName(WireNames.MetaClientInfo);
+      JsonSerializer.Serialize(writer, clientInfo, WireJsonContext.Default.Implementation);
+      writer.WritePropertyName(WireNames.MetaClientCapabilities);
+      JsonSerializer.Serialize(writer, capabilities, WireJsonContext.Default.ClientCapabilities);
+      writer.WriteEndObject();
+    }
+
+    // Strip the object's braces: the members go inside the _meta object being written.
+    return buffer.WrittenSpan[1..^1].ToArray();
+  }
+
+  private static bool HasTopLevel(ReadOnlySpan<byte> json, ReadOnlySpan<byte> first, ReadOnlySpan<byte> second)
+  {
+    var reader = new Utf8JsonReader(json);
+    if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+    {
+      return true;
+    }
+
+    while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+    {
+      if (reader.ValueTextEquals(first) || (!second.IsEmpty && reader.ValueTextEquals(second)))
+      {
+        return true;
+      }
+
+      reader.Read();
+      if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+      {
+        reader.Skip();
+      }
+    }
+
+    return false;
+  }
+
   private static void WriteServerInfo(Utf8JsonWriter writer, Implementation serverInfo)
   {
     writer.WritePropertyName(WireNames.MetaServerInfo);
