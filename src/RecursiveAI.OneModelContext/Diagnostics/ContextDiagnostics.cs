@@ -68,6 +68,9 @@ public enum DiagnosticKind
 
   /// <summary>An informational note from a protocol layer.</summary>
   Note,
+
+  /// <summary>A configuration that works but weakens a safe default, such as listening on a non-loopback address without TLS.</summary>
+  Warning,
 }
 
 /// <summary>An event for hosts that do not use OpenTelemetry. It never carries tokens or message bodies.</summary>

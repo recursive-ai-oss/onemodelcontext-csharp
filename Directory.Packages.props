@@ -7,6 +7,16 @@
     <!-- Coverage instrumentation for the fuzz harness only. -->
     <PackageVersion Include="SharpFuzz" Version="2.2.0" />
   </ItemGroup>
+  <!-- The one package each adapter adapts. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.11.0" />
+  </ItemGroup>
+  <!-- Samples and tests only: the generic host implementation, and the MEAI function-calling chat client. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.11.0" />
+  </ItemGroup>
   <!-- Roslyn, build time only, for the source generator. 4.8 is the compiler of the .NET 8 SDK; a generator built
        against it loads in every later compiler. -->
   <ItemGroup>

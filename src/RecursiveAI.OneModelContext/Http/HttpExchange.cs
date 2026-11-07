@@ -62,6 +62,11 @@ public sealed class HttpHeaders
   /// <param name="name">The header name.</param>
   public IReadOnlyList<string> GetAll(string name) => _values.TryGetValue(name, out var list) ? list : [];
 
+  /// <summary>Removes a header and all its values.</summary>
+  /// <param name="name">The header name.</param>
+  /// <returns>True when the header was present.</returns>
+  public bool Remove(string name) => _values.Remove(name);
+
   /// <summary>Whether the header is present.</summary>
   /// <param name="name">The header name.</param>
   public bool Contains(string name) => _values.ContainsKey(name);
@@ -96,6 +101,12 @@ public interface IHttpRequest
 
   /// <summary>The peer's address, or null when the host does not know it.</summary>
   IPAddress? RemoteAddress { get; }
+
+  /// <summary>
+  /// The scheme the caller used, <c>http</c> or <c>https</c>. A host behind a trusted proxy reports the scheme the proxy saw. Default
+  /// <c>http</c> for hosts that do not say.
+  /// </summary>
+  string Scheme => "http";
 }
 
 /// <summary>An HTTP response a handler fills in. Set the status and headers before the first write to <see cref="Body"/>.</summary>

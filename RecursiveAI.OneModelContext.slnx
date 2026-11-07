@@ -4,6 +4,8 @@
     <Project Path="src/RecursiveAI.OneModelContext.Generator/RecursiveAI.OneModelContext.Generator.csproj" />
     <Project Path="src/RecursiveAI.OneModelContext.Cli/RecursiveAI.OneModelContext.Cli.csproj" />
     <Project Path="src/RecursiveAI.OneModelContext.AspNetCore/RecursiveAI.OneModelContext.AspNetCore.csproj" />
+    <Project Path="src/RecursiveAI.OneModelContext.Hosting/RecursiveAI.OneModelContext.Hosting.csproj" />
+    <Project Path="src/RecursiveAI.OneModelContext.Extensions.AI/RecursiveAI.OneModelContext.Extensions.AI.csproj" />
   </Folder>
   <Folder Name="/templates/">
     <Project Path="templates/RecursiveAI.OneModelContext.Templates.csproj" />
@@ -12,12 +14,14 @@
     <Project Path="tests/RecursiveAI.OneModelContext.Tests/RecursiveAI.OneModelContext.Tests.csproj" />
     <Project Path="tests/RecursiveAI.OneModelContext.AspNetCore.Tests/RecursiveAI.OneModelContext.AspNetCore.Tests.csproj" />
     <Project Path="tests/RecursiveAI.OneModelContext.SamplesTests/RecursiveAI.OneModelContext.SamplesTests.csproj" />
+    <Project Path="tests/RecursiveAI.OneModelContext.AdapterTests/RecursiveAI.OneModelContext.AdapterTests.csproj" />
     <Project Path="tests/RecursiveAI.OneModelContext.CliTests/RecursiveAI.OneModelContext.CliTests.csproj" />
     <Project Path="tests/RecursiveAI.OneModelContext.AotSmoke/RecursiveAI.OneModelContext.AotSmoke.csproj" />
     <Project Path="tests/RecursiveAI.OneModelContext.TestServer/RecursiveAI.OneModelContext.TestServer.csproj" />
     <Project Path="tests/RecursiveAI.OneModelContext.LegacyStdio/RecursiveAI.OneModelContext.LegacyStdio.csproj" />
   </Folder>
   <Folder Name="/conformance/">
+    <Project Path="conformance/Client/RecursiveAI.OneModelContext.ConformanceClient.csproj" />
     <Project Path="conformance/Server/RecursiveAI.OneModelContext.ConformanceServer.csproj" />
     <Project Path="conformance/AuthorizationServer/RecursiveAI.OneModelContext.ConformanceAuthorizationServer.csproj" />
   </Folder>
@@ -26,11 +30,14 @@
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/StdioServer/RecursiveAI.OneModelContext.Samples.StdioServer.csproj" />
+    <Project Path="samples/HttpServer/RecursiveAI.OneModelContext.Samples.HttpServer.csproj" />
     <Project Path="samples/IndexedSearch/RecursiveAI.OneModelContext.Samples.IndexedSearch.csproj" />
     <Project Path="samples/LiveControl/RecursiveAI.OneModelContext.Samples.LiveControl.csproj" />
     <Project Path="samples/ToolBridge/RecursiveAI.OneModelContext.Samples.ToolBridge.csproj" />
     <Project Path="samples/Explorer/RecursiveAI.OneModelContext.Samples.Explorer.csproj" />
     <Project Path="samples/AspNetCoreServer/RecursiveAI.OneModelContext.Samples.AspNetCoreServer.csproj" />
+    <Project Path="samples/HostedServer/RecursiveAI.OneModelContext.Samples.HostedServer.csproj" />
+    <Project Path="samples/ChatTools/RecursiveAI.OneModelContext.Samples.ChatTools.csproj" />
     <Project Path="samples/QuickPath/RecursiveAI.OneModelContext.Samples.QuickPath.csproj" />
   </Folder>
 </Solution>

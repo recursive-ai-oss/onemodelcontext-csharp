@@ -41,10 +41,16 @@ internal sealed class CliOptions
   /// <summary>The bearer token <c>proxy</c> requires from its callers.</summary>
   public string? Token { get; private set; }
 
+  /// <summary>A bearer token to send to an http(s) server, or <c>@file</c> holding it.</summary>
+  public string? Bearer { get; private set; }
+
   /// <summary>Allows <c>proxy</c> to listen on a non-loopback address.</summary>
   public bool AllowNonLoopback { get; private set; }
 
   public List<string> AllowOrigins { get; } = [];
+
+  /// <summary>Extra <c>Host</c> header values <c>proxy</c> accepts besides loopback names.</summary>
+  public List<string> AllowHosts { get; } = [];
 
   /// <summary>The first problem found, or null.</summary>
   public string? Error { get; private set; }
@@ -203,6 +209,16 @@ internal sealed class CliOptions
           break;
         case "--token":
           o.Token = Value();
+          break;
+        case "--bearer":
+          o.Bearer = Value();
+          break;
+        case "--allow-host":
+          if (Value() is { } allowedHost)
+          {
+            o.AllowHosts.Add(allowedHost);
+          }
+
           break;
         case "--allow-origin":
           if (Value() is { } origin)

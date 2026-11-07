@@ -85,6 +85,34 @@ internal static class ConformanceContent
 
     server.Tools.Add(new ToolDefinition("test_error_handling", "Always fails.", NoArguments), (_, _) => throw new ToolException("This tool intentionally returns an error for testing"));
 
+    // The subscription scenarios call these to make the server's lists change while a listen stream is open. Adding or removing a registry
+    // entry is the change; the server tells every stream that asked for it.
+    server.Tools.Add(
+      new ToolDefinition("test_trigger_tool_change", "Adds or removes a tool, so the tool list changes.", NoArguments),
+      (_, _) =>
+      {
+        if (!server.Tools.Remove("test_dynamic_tool"))
+        {
+          server.Tools.Add(new ToolDefinition("test_dynamic_tool", "Appears and disappears.", NoArguments), (_, _) => Text("dynamic"));
+        }
+
+        return Text("Tool list changed");
+      });
+
+    server.Tools.Add(
+      new ToolDefinition("test_trigger_prompt_change", "Adds or removes a prompt, so the prompt list changes.", NoArguments),
+      (_, _) =>
+      {
+        if (!server.Prompts.Remove("test_dynamic_prompt"))
+        {
+          server.Prompts.Add(
+            new PromptDefinition("test_dynamic_prompt", "Appears and disappears."),
+            (_, _) => ValueTask.FromResult(new GetPromptResult { Messages = [new PromptMessage { Role = "user", Content = TextContent.Of("dynamic") }] }));
+        }
+
+        return Text("Prompt list changed");
+      });
+
     server.Tools.Add(
       new ToolDefinition("test_tool_with_progress", "Reports progress.", NoArguments),
       async (_, ctx) =>

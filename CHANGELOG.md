@@ -27,3 +27,12 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
   `docs/authorization-server.md`.
 - `IAuthorizationStore` with in-memory and file implementations; `GuardedHttpFetcher` and `AddressPolicy` for fetching remote-supplied
   URLs safely; `JsonWebSigningKey` for signing JWTs with BCL keys; `MapAuthorizationServer` for ASP.NET Core.
+- The Streamable HTTP client (`ContextTransport.Http`, `ModelContext.ConnectAsync(Uri)`), speaking both eras with sessions, the GET stream
+  and `Last-Event-ID` resumption, a client-only fallback to the deprecated HTTP+SSE transport, an SSE reader with bounded events, a hook
+  for adding credentials to every request, and `subscriptions/listen` on the client. See `docs/http-client.md`.
+- `ModelContext.ConnectAsync("https://...")` connects a URL over Streamable HTTP, with the same callbacks as a command line.
+- `RecursiveAI.OneModelContext.Hosting`: `services.AddContextServer<T>()` for the generic host, with tool classes created by the container,
+  a DI scope per request (`context.GetRequiredService<T>()`), hosted stdio, stream and built-in listener lifetimes that stop with the host,
+  an `ILogger` bridge for the diagnostics stream that redacts credentials, and `AddContextClient` for apps that consume a server.
+- `RecursiveAI.OneModelContext.Extensions.AI`: a client's tools as `AIFunction`s for any `IChatClient`, `AIFunction`s served as tools
+  (`server.AddAIFunction`), and Sampling answered by any `IChatClient` (`ChatClientSampling.CreateHandler`). See `docs/adapters.md`.

@@ -83,6 +83,43 @@ if (await AuthorizationServerSmoke.RunAsync() is { } failure)
   return 1;
 }
 
+// A Streamable HTTP client round trip over a loopback socket: the library's HTTP client against a few lines of HTTP/1.1 that hand each
+// POST body to a server's message-level entry. It covers era negotiation, JSON responses and the refused listening stream.
+using (var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0))
+{
+  listener.Start();
+  var httpServer = new ContextServer("smoke", "1");
+  httpServer.Tools.Add(new ToolDefinition("echo", "Echoes.", JsonDocument.Parse("""{"type":"object"}""").RootElement), (_, _) => ValueTask.FromResult(CallToolResult.FromText("over http")));
+  using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+  _ = Task.Run(async () =>
+  {
+    try
+    {
+      while (true)
+      {
+        var socket = await listener.AcceptSocketAsync(stop.Token);
+        _ = Task.Run(() => HttpLoop.ServeAsync(socket, httpServer, stop.Token));
+      }
+    }
+    catch (Exception)
+    {
+      // Shutting down.
+    }
+  });
+
+  var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+  await using var http = await ModelContext.ConnectAsync(new Uri("http://127.0.0.1:" + port + "/mcp"), cancellationToken: stop.Token);
+  var httpTools = await http.ListToolsAsync(stop.Token);
+  var httpEcho = await http.CallToolAsync("echo", cancellationToken: stop.Token);
+  if (httpTools.Count != 1 || httpEcho.Text != "over http")
+  {
+    Console.Error.WriteLine("http round trip failed: " + httpTools.Count + " " + httpEcho.Text);
+    return 1;
+  }
+
+  stop.Cancel();
+}
+
 Console.WriteLine("ok " + response);
 return 0;
 
@@ -120,3 +157,62 @@ internal sealed class Yes : IClientRequestHandler
     ValueTask.FromResult<Result>(new ElicitResult { Action = "accept", Content = new() { ["confirm"] = JsonDocument.Parse("true").RootElement } });
 }
 
+
+// Just enough HTTP/1.1 for the smoke: POST bodies go to the server, anything else is refused with 405.
+internal static class HttpLoop
+{
+  internal static async Task ServeAsync(System.Net.Sockets.Socket socket, ContextServer server, CancellationToken cancellationToken)
+  {
+    using (socket)
+    {
+      using var stream = new System.Net.Sockets.NetworkStream(socket, ownsSocket: false);
+      var buffer = new System.Collections.Generic.List<byte>();
+      var one = new byte[1];
+      while (!cancellationToken.IsCancellationRequested)
+      {
+        buffer.Clear();
+        while (!EndsWithBlankLine(buffer))
+        {
+          if (await stream.ReadAsync(one, cancellationToken) == 0)
+          {
+            return;
+          }
+
+          buffer.Add(one[0]);
+        }
+
+        var head = System.Text.Encoding.ASCII.GetString(buffer.ToArray());
+        var length = 0;
+        foreach (var line in head.Split("\r\n"))
+        {
+          if (line.StartsWith("content-length:", StringComparison.OrdinalIgnoreCase))
+          {
+            length = int.Parse(line.AsSpan(15).Trim(), System.Globalization.CultureInfo.InvariantCulture);
+          }
+        }
+
+        var body = new byte[length];
+        await stream.ReadExactlyAsync(body, cancellationToken);
+        if (!head.StartsWith("POST ", StringComparison.Ordinal))
+        {
+          await stream.WriteAsync("HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n"u8.ToArray(), cancellationToken);
+          continue;
+        }
+
+        var reply = await server.HandleMessageAsync(System.Text.Encoding.UTF8.GetString(body), cancellationToken: cancellationToken);
+        if (reply is null)
+        {
+          await stream.WriteAsync("HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n"u8.ToArray(), cancellationToken);
+          continue;
+        }
+
+        var bytes = System.Text.Encoding.UTF8.GetBytes(reply);
+        await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + bytes.Length + "\r\n\r\n"), cancellationToken);
+        await stream.WriteAsync(bytes, cancellationToken);
+      }
+    }
+  }
+
+  private static bool EndsWithBlankLine(System.Collections.Generic.List<byte> b) =>
+    b.Count >= 4 && b[^4] == '\r' && b[^3] == '\n' && b[^2] == '\r' && b[^1] == '\n';
+}

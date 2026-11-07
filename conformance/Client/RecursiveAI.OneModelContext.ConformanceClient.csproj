@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The client the protocol's conformance suite starts and tests. The suite appends the URL of its test server to the command line and
+       names the scenario in the environment; the client then does what a typical host does with any server: lists everything and uses it.
+       It ships in no package. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>RecursiveAI.OneModelContext.ConformanceClient</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext/RecursiveAI.OneModelContext.csproj" />
+  </ItemGroup>
+
+</Project>
