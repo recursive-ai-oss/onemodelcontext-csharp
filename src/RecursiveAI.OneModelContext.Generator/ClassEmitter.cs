@@ -237,6 +237,20 @@ internal sealed class ClassEmitter
     var uiResource = NamedString(attribute, "UiResource");
     if (uiResource is not null)
     {
+      // The Apps extension only knows ui:// resources; catch a typo here rather than at server start.
+      if (!uiResource.StartsWith("ui://", StringComparison.Ordinal) || uiResource.Length <= 5)
+      {
+        throw new MappingException("OMCG0012", "UiResource '" + uiResource + "' must be a ui:// URI with something after the scheme.", location);
+      }
+
+      foreach (var v in NamedStrings(attribute, "UiVisibility") ?? System.Array.Empty<string>())
+      {
+        if (v is not ("model" or "app"))
+        {
+          throw new MappingException("OMCG0012", "UiVisibility '" + v + "' must be \"model\" or \"app\".", location);
+        }
+      }
+
       _registrations.Append("    ").Append(Core).AppendLine(".Extensions.Apps.AppsServerExtensions.UseApps(server);");
     }
 

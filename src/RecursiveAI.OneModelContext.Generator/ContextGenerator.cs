@@ -152,6 +152,8 @@ internal static class Diagnostics
   public static readonly DiagnosticDescriptor GenericClass = Make("OMCG0010", "The containing class is generic");
   public static readonly DiagnosticDescriptor NamingPolicy = Make("OMCG0011", "Unsupported property naming policy");
 
+  public static readonly DiagnosticDescriptor BadUiResource = Make("OMCG0012", "The UiResource or UiVisibility is not valid");
+
   public static DiagnosticDescriptor ById(string id) => id switch
   {
     "OMCG0001" => NotPartial,
@@ -164,6 +166,7 @@ internal static class Diagnostics
     "OMCG0008" => BadName,
     "OMCG0009" => TooManyInjected,
     "OMCG0010" => GenericClass,
+    "OMCG0012" => BadUiResource,
     _ => NamingPolicy,
   };
 }

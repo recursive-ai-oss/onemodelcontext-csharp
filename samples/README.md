@@ -11,6 +11,7 @@ Small programs that show how OneModelContext is used. Each one runs on both prot
 | [`Explorer`](Explorer) | A client for any stdio server: connect (the era is negotiated), list tools, call one, read a resource, get a prompt, answer the server's questions from typed host callbacks (`OnConfirm`, `OnElicit`). Connects with `ModelContext.ConnectAsync("<command>", onConfirm: ...)`. | yes |
 | [`QuickPath`](QuickPath) | The reflection quick path: tools, a resource and a prompt from lambdas, for trying things out. Not trimmable and not NativeAOT. | no |
 | [`HttpServer`](HttpServer) | Two tools served on the built-in HTTP listener with `ModelContext.ServeHttpAsync` (loopback only). | yes |
+| [`AppsServer`](AppsServer) | A tool with a `ui://` view (MCP Apps) and a text fallback for clients that do not render it, served over stdio, `--http`, or a self-demo on each era. | yes |
 | [`StdioServer`](StdioServer) | A notebook server with tools, a resource template and a prompt. | yes |
 
 ## Running them

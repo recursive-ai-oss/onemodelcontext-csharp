@@ -47,6 +47,8 @@ public class GeneratorDiagnosticsTests
   [InlineData("public partial class C { [Tool] public string A(RequestContext a, RequestContext b) => \"\"; }", "OMCG0009")]
   [InlineData("public partial class C { [Tool] public string A(CancellationToken a, CancellationToken b) => \"\"; }", "OMCG0009")]
   [InlineData("public partial class C { [Tool] public string A(Item i) => \"\"; } public record Item(string N); [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)] [JsonSerializable(typeof(Item))] public partial class J : JsonSerializerContext { }", "OMCG0011")]
+  [InlineData("public partial class C { [Tool(UiResource = \"http://x\")] public string A() => \"\"; }", "OMCG0012")]
+  [InlineData("public partial class C { [Tool(UiResource = \"ui://x/v\", UiVisibility = new[] { \"user\" })] public string A() => \"\"; }", "OMCG0012")]
   [InlineData("public partial class C { [Resource(\"fixed://x\")] public string A(string id) => \"\"; }", "OMCG0002")]
   [InlineData("public partial class C { [Resource(\"t://{id}\")] public string A(Uri id) => \"\"; }", "OMCG0002")]
   [InlineData("public partial class C { [Resource(\"t://{id}\")] public int A(string id) => 1; }", "OMCG0003")]
