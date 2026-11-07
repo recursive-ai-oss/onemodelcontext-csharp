@@ -136,7 +136,10 @@ internal sealed partial class CliApp(TextWriter output, TextWriter error, TextRe
       TransportException or NotSupportedException or IOException => ExitCode.Transport,
       _ => ExitCode.Failed,
     };
-    await error.WriteLineAsync("onemodelcontext: " + ex.Message).ConfigureAwait(false);
+    var message = ex is ProtocolVersionException
+      ? ex.Message.Replace("connect with EraPreference.Auto or EraPreference.Legacy", "run again with --era auto or --era legacy", StringComparison.Ordinal)
+      : ex.Message;
+    await error.WriteLineAsync("onemodelcontext: " + message).ConfigureAwait(false);
     return code;
   }
 

@@ -210,7 +210,10 @@ internal sealed class Render(bool colour)
       names.Add("prompts" + (caps.Prompts.ListChanged == true ? " (listChanged)" : ""));
     }
 
+    // Reports what the server offers; the CLI never calls logging, so the deprecation does not apply here.
+#pragma warning disable OMC0003
     if (caps.Logging.ValueKind == JsonValueKind.Object)
+#pragma warning restore OMC0003
     {
       names.Add("logging");
     }
