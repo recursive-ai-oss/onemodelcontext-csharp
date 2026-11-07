@@ -8,6 +8,7 @@ several instances of an application can share them. It references the core packa
 |---|---|---|
 | `EfAuthorizationStore<TContext>` | `IAuthorizationStore` | `…Clients`, `…AuthorizationCodes`, `…RefreshTokens`, `…Revocations`, `…SeenAssertions` |
 | `EfTokenStore<TContext>` | `ITokenStore` | `…TokenRecords` |
+| `EfTaskStore<TContext>` | `ITaskStore` (Tasks extension, experimental) | `…Tasks` |
 
 Table names start with `ModelContext` (change it with the `tablePrefix` argument; `schema` sets the database schema).
 
@@ -17,7 +18,7 @@ Table names start with `ModelContext` (change it with the `tablePrefix` argument
 public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
     protected override void OnModelCreating(ModelBuilder modelBuilder)
-        => modelBuilder.ApplyContextStores();      // or ApplyAuthorizationStore() / ApplyTokenStore()
+        => modelBuilder.ApplyContextStores();      // or ApplyAuthorizationStore() / ApplyTokenStore() / ApplyTaskStore()
 }
 
 services.AddDbContextFactory<AppDbContext>(o => o.UseNpgsql(connectionString));
@@ -44,6 +45,19 @@ from the model your context builds; no hand-written SQL is needed.
 
 The authorization server itself keeps no state between requests beyond the store, but both instances need the same signing keys and the
 same `ResumeKey`.
+
+## Tasks across instances
+
+`EfTaskStore<TContext>` is the store to give `TaskServerOptions.Store` when more than one server instance serves the Tasks extension.
+`UpdateAsync` is the compare-and-swap the interface defines: `UPDATE … SET Version = Version + 1 WHERE TaskId = @id AND Version = @version`,
+and the affected-row count says whether the change applied. A task created through one instance can be polled, answered and cancelled
+through another; the instance running the work sees the answer and the cancel request when it next reads the row.
+
+The class is marked `[Experimental("OMCX0001")]` because the interface it implements is: using it needs the same opt-in as the Tasks
+extension (`#pragma warning disable OMCX0001`, or `NoWarn`). The adapter itself builds without suppressing anything. The capacity limit
+(default 10,000) counts rows before the insert, so with several instances it can be overshot by about the number of concurrent creators.
+Task ids are at most 128 characters. Results and errors are stored as the JSON text the service wrote; protect the table like any other
+table of user data.
 
 ## At rest
 
