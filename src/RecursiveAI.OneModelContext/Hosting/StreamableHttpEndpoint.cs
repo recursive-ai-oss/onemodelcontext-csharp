@@ -275,12 +275,6 @@ public sealed class StreamableHttpEndpoint : IDisposable
       return;
     }
 
-    if (request.Headers.GetFirst(WireNames.HeaderProtocolVersion) is { } versionHeader && !IsSupported(versionHeader))
-    {
-      await WriteProtocolErrorAsync(call, 400, UnsupportedVersion(versionHeader), default).ConfigureAwait(false);
-      return;
-    }
-
     var read = JsonRpcReader.Read(body.WrittenMemory, _server.Options.ReaderOptions);
     switch (read.Kind)
     {
@@ -290,6 +284,14 @@ public sealed class StreamableHttpEndpoint : IDisposable
       case JsonRpcReadKind.Batch:
         await PostBatchAsync(call, body.WrittenMemory).ConfigureAwait(false);
         return;
+    }
+
+    // An unsupported version header is refused with 400 and -32022 (2026-07-28 Streamable HTTP, "Protocol Version Header"). The error carries the
+    // request's id when the body is a request, because every error answers the request it belongs to (JSON-RPC 2.0 section 5).
+    if (request.Headers.GetFirst(WireNames.HeaderProtocolVersion) is { } versionHeader && !IsSupported(versionHeader))
+    {
+      await WriteProtocolErrorAsync(call, 400, UnsupportedVersion(versionHeader), (read.Message as JsonRpcRequest)?.Id ?? default).ConfigureAwait(false);
+      return;
     }
 
     switch (read.Message)
@@ -309,6 +311,15 @@ public sealed class StreamableHttpEndpoint : IDisposable
   private async ValueTask PostRequestAsync(Call call, JsonRpcRequest rpcRequest, bool acceptsSse)
   {
     var sessionHeader = call.Request.Headers.GetFirst(WireNames.HeaderSessionId);
+
+    // 2026-07-28 Streamable HTTP, "Protocol Version Header": a method the server does not implement is 404 with -32601. The handshake was
+    // removed in that revision, so an initialize that names it is such a method; a legacy initialize names no version header yet.
+    if (rpcRequest.Method == Methods.Initialize && call.Request.Headers.GetFirst(WireNames.HeaderProtocolVersion) == ProtocolVersions.V20260728)
+    {
+      await WriteErrorAsync(call, 404, JsonRpcErrorCodes.MethodNotFound, "Method not found: initialize was removed in 2026-07-28; send server/discover.", rpcRequest.Id).ConfigureAwait(false);
+      return;
+    }
+
     var era = CodecSelector.Select(rpcRequest.Method, rpcRequest.Params, new ServerSessionState(), sessionHeader is not null);
     HttpSession? session = null;
     var created = false;
@@ -412,7 +423,7 @@ public sealed class StreamableHttpEndpoint : IDisposable
 
       try
       {
-        await channel.FinishAsync(response, StatusFor(response, era, HasVersionMeta(rpcRequest.Params))).ConfigureAwait(false);
+        await channel.FinishAsync(response, StatusFor(response, era, HasRequiredMeta(rpcRequest.Params))).ConfigureAwait(false);
       }
       catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException or OperationCanceledException)
       {
@@ -448,6 +459,7 @@ public sealed class StreamableHttpEndpoint : IDisposable
   private async ValueTask PostNotificationAsync(Call call, JsonRpcNotification notification)
   {
     var sessionHeader = call.Request.Headers.GetFirst(WireNames.HeaderSessionId);
+
     var era = CodecSelector.Select(notification.Method, notification.Params, new ServerSessionState(), sessionHeader is not null);
     ServerSessionState state;
     if (era == ProtocolEra.Modern)
@@ -690,7 +702,11 @@ public sealed class StreamableHttpEndpoint : IDisposable
       ? version.GetString()
       : null;
 
-  private static bool HasVersionMeta(JsonElement parameters) => ReadMetaVersion(parameters) is not null;
+  // SEP-2575: a request missing the per-request protocol fields is rejected with 400 (the suite checks both fields).
+  private static bool HasRequiredMeta(JsonElement parameters) =>
+    ReadMetaVersion(parameters) is not null
+    && parameters.GetProperty("_meta").TryGetProperty(WireNames.MetaClientCapabilities, out var capabilities)
+    && capabilities.ValueKind == JsonValueKind.Object;
 
   private bool IsSupported(string version)
   {
@@ -716,7 +732,7 @@ public sealed class StreamableHttpEndpoint : IDisposable
 
   // Envelope errors are 400; an unknown method on a modern request is 404 so that it can be told from a legacy server's 404
   // (2026-07-28 Streamable HTTP, "Protocol Version Header"). Everything else a handler says stays a 200 with the error in the body.
-  private static int StatusFor(JsonRpcMessage? response, ProtocolEra era, bool hadVersionMeta)
+  private static int StatusFor(JsonRpcMessage? response, ProtocolEra era, bool hadRequiredMeta)
   {
     if (response is not JsonRpcErrorResponse error)
     {
@@ -728,7 +744,7 @@ public sealed class StreamableHttpEndpoint : IDisposable
       JsonRpcErrorCodes.ParseError or JsonRpcErrorCodes.InvalidRequest => 400,
       ProtocolErrorCodes.HeaderMismatch or ProtocolErrorCodes.MissingRequiredClientCapability or ProtocolErrorCodes.UnsupportedProtocolVersion => 400,
       JsonRpcErrorCodes.MethodNotFound when era == ProtocolEra.Modern => 404,
-      JsonRpcErrorCodes.InvalidParams when era == ProtocolEra.Modern && !hadVersionMeta => 400,
+      JsonRpcErrorCodes.InvalidParams when era == ProtocolEra.Modern && !hadRequiredMeta => 400,
       _ => 200,
     };
   }

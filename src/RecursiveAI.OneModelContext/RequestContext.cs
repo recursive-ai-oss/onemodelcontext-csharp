@@ -137,8 +137,9 @@ public sealed partial class RequestContext
   /// <summary>Asks the user for values described by a flat form schema.</summary>
   /// <param name="message">What to ask.</param>
   /// <param name="requestedSchema">An object schema of primitive properties.</param>
+  /// <param name="inputKey">On 2026-07-28, the name of this question in <c>inputRequests</c> and its answer in <c>inputResponses</c>. Null numbers the questions <c>input-1</c>, <c>input-2</c> in the order they are asked. Other revisions ignore it.</param>
   /// <exception cref="MissingCapabilityException">The client cannot elicit.</exception>
-  public async ValueTask<ElicitResult> ElicitAsync(string message, JsonElement requestedSchema)
+  public async ValueTask<ElicitResult> ElicitAsync(string message, JsonElement requestedSchema, string? inputKey = null)
   {
     ArgumentNullException.ThrowIfNull(message);
     if (ClientCapabilities.Elicitation is null)
@@ -151,7 +152,7 @@ public sealed partial class RequestContext
     // 2026-07-28 spells the mode out; earlier revisions treat a missing mode as a form.
     var parameters = new ElicitRequestParams { Mode = Era == ProtocolEra.Modern ? "form" : null, Message = message, RequestedSchema = requestedSchema };
     var element = JsonSerializer.SerializeToElement(parameters, WireJsonContext.Default.ElicitRequestParams);
-    var answer = await _input.RequestInputAsync(Methods.ElicitationCreate, element, CancellationToken).ConfigureAwait(false);
+    var answer = await _input.RequestInputAsync(Methods.ElicitationCreate, element, CancellationToken, inputKey).ConfigureAwait(false);
     try
     {
       return answer.Deserialize(WireJsonContext.Default.ElicitResult)

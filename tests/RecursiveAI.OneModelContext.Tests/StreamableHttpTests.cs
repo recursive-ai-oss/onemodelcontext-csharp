@@ -105,6 +105,29 @@ public class StreamableHttpTests
     Assert.Equal("1900-01-01", body.GetProperty("error").GetProperty("data").GetProperty("requested").GetString());
   }
 
+  [Fact]
+  public async Task An_error_for_an_unsupported_version_carries_the_id_of_the_request()
+  {
+    var (_, endpoint) = Create();
+    var exchange = TestExchange.Post(Call("echo", id: 301), ("MCP-Protocol-Version", "1900-01-01"), ("Mcp-Method", "tools/call"), ("Mcp-Name", "echo")).Run(endpoint);
+
+    var body = await ErrorOf(exchange, 400, ProtocolErrorCodes.UnsupportedProtocolVersion);
+
+    Assert.Equal(301, body.GetProperty("id").GetInt32());
+  }
+
+  [Fact]
+  public async Task Initialize_naming_the_modern_version_is_method_not_found_with_404()
+  {
+    // 2026-07-28 Streamable HTTP, "Protocol Version Header": an unimplemented method is 404 with -32601.
+    var (_, endpoint) = Create();
+    var exchange = TestExchange.Post("""{"jsonrpc":"2.0","id":7,"method":"initialize","params":{}}""", ("MCP-Protocol-Version", "2026-07-28"), ("Mcp-Method", "initialize")).Run(endpoint);
+
+    var body = await ErrorOf(exchange, 404, JsonRpcErrorCodes.MethodNotFound);
+
+    Assert.Equal(7, body.GetProperty("id").GetInt32());
+  }
+
   [Theory]
   [InlineData("tools/list")]
   [InlineData("")]

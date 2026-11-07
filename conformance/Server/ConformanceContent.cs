@@ -22,6 +22,8 @@ internal static class ConformanceContent
     AddTools(server);
     AddResources(server);
     AddPrompts(server);
+    AddModernDiagnostics(server);
+    AddInputRequired(server);
     // Suggests values that start with what was typed, from a fixed list.
     server.Completions = (request, _) =>
     {
@@ -117,7 +119,7 @@ internal static class ConformanceContent
 
     // A tool whose input schema uses 2020-12 keywords: $schema, $defs, $ref and additionalProperties.
     server.Tools.Add(
-      new ToolDefinition("json_schema_2020_12_tool", "A tool whose schema uses JSON Schema 2020-12 keywords.", Parse("""{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","$defs":{"address":{"type":"object","properties":{"street":{"type":"string"},"city":{"type":"string"}}}},"properties":{"name":{"type":"string"},"address":{"$ref":"#/$defs/address"}},"additionalProperties":false}""")),
+      new ToolDefinition("json_schema_2020_12_tool", "A tool whose schema uses JSON Schema 2020-12 keywords.", Parse("""{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","$defs":{"address":{"$anchor":"address","type":"object","properties":{"street":{"type":"string"},"city":{"type":"string"}}}},"properties":{"name":{"type":"string"},"address":{"$ref":"#/$defs/address"},"kind":{"type":"string"},"company":{"type":"string"},"email":{"type":"string"}},"allOf":[{"required":["name"]},{"anyOf":[{"required":["address"]},{"required":["email"]}]}],"if":{"properties":{"kind":{"const":"business"}},"required":["kind"]},"then":{"required":["company"]},"else":{},"additionalProperties":false}""")),
       (_, _) => Text("JSON Schema 2020-12 tool executed"));
 
     server.Tools.Add(
@@ -131,6 +133,144 @@ internal static class ConformanceContent
         }
 
         return CallToolResult.FromText("Reconnection test completed");
+      });
+  }
+
+  // Diagnostic tools the stateless-server scenarios look for by name.
+  private static void AddModernDiagnostics(ContextServer server)
+  {
+    // Needs sampling: with no declared sampling capability the request is refused with MissingRequiredClientCapability (-32021).
+    server.Tools.Add(
+      new ToolDefinition("test_missing_capability", "Needs a capability the client may not have declared.", NoArguments),
+      async (_, ctx) =>
+      {
+        var answer = await ctx.SampleAsync(new CreateMessageRequestParams { Messages = [new SamplingMessage { Role = "user", Content = [TextContent.Of("hello")] }], MaxTokens = 10 });
+        return CallToolResult.FromText("sampled with " + answer.Model);
+      });
+
+    // Asks for input; on 2026-07-28 the question comes back in the result stream, never as an independent request.
+    server.Tools.Add(
+      new ToolDefinition("test_streaming_elicitation", "Asks the user a question.", NoArguments),
+      async (_, ctx) =>
+      {
+        var answer = await ctx.ElicitAsync("Which colour?", Parse("""{"type":"object","properties":{"colour":{"type":"string"}}}"""));
+        return CallToolResult.FromText("action=" + answer.Action);
+      });
+
+    server.Tools.Add(
+      new ToolDefinition("test_logging_tool", "Logs when the request asked for logs.", NoArguments),
+      async (_, ctx) =>
+      {
+        await ctx.LogAsync("info", "A log line");
+        return CallToolResult.FromText("logged");
+      });
+
+    // x-mcp-header mirrors an argument into a header the server checks against the body (SEP-2243).
+    server.Tools.Add(
+      new ToolDefinition("test_custom_headers", "Arguments mirrored into headers.", Parse("""{"type":"object","properties":{"region":{"type":"string","x-mcp-header":"Region"},"priority":{"type":"integer","x-mcp-header":"Priority"},"urgent":{"type":"boolean","x-mcp-header":"Urgent"},"note":{"type":"string"}}}""")),
+      (_, _) => Text("custom headers accepted"));
+  }
+
+  private static readonly JsonElement NameForm = Parse("""{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}""");
+
+  // Multi round trip requests (basic/patterns/mrtr): each ask is answered from inputResponses on the retry or ends the attempt.
+  private static void AddInputRequired(ContextServer server)
+  {
+    server.Tools.Add(
+      new ToolDefinition("test_input_required_result_elicitation", "Asks the user for their name.", NoArguments),
+      async (_, ctx) =>
+      {
+        var answer = await ctx.ElicitAsync("What is your name?", NameForm, "user_name");
+        var name = answer.Content is { } values && values.TryGetValue("name", out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : "";
+        return CallToolResult.FromText("Hello, " + name + "!");
+      });
+
+    // The signed requestState of the first round comes back changed in the second; the framework refuses it before this handler runs.
+    server.Tools.Add(
+      new ToolDefinition("test_input_required_result_tampered_state", "Asks for input with signed state.", NoArguments),
+      async (_, ctx) =>
+      {
+        ctx.State["step"] = "awaiting-name";
+        var answer = await ctx.ElicitAsync("What is your name?", NameForm);
+        return CallToolResult.FromText("action=" + answer.Action);
+      });
+
+    server.Tools.Add(
+      new ToolDefinition("test_input_required_result_sampling", "Asks the client's model.", NoArguments),
+      async (_, ctx) =>
+      {
+        var answer = await ctx.SampleAsync(new CreateMessageRequestParams { Messages = [new SamplingMessage { Role = "user", Content = [TextContent.Of("Say hello")] }], MaxTokens = 50 });
+        return CallToolResult.FromText("Sampled by " + answer.Model);
+      });
+
+    server.Tools.Add(
+      new ToolDefinition("test_input_required_result_list_roots", "Asks the client for its roots.", NoArguments),
+      async (_, ctx) =>
+      {
+        var roots = await ctx.ListRootsAsync();
+        return CallToolResult.FromText("Roots: " + roots.Roots.Count);
+      });
+
+    server.Tools.Add(
+      new ToolDefinition("test_input_required_result_request_state", "Asks for input and keeps state between attempts.", NoArguments),
+      async (_, ctx) =>
+      {
+        ctx.State["step"] = "awaiting-name";
+        var answer = await ctx.ElicitAsync("What is your name?", NameForm);
+        return CallToolResult.FromText("State was " + ctx.State["step"] + ", action=" + answer.Action);
+      });
+
+    server.Tools.Add(
+      new ToolDefinition("test_input_required_result_multiple_inputs", "Asks for several kinds of input at once.", NoArguments),
+      async (_, ctx) =>
+      {
+        var elicit = ctx.ElicitAsync("What is your name?", NameForm).AsTask();
+        var sample = ctx.SampleAsync(new CreateMessageRequestParams { Messages = [new SamplingMessage { Role = "user", Content = [TextContent.Of("Say hello")] }], MaxTokens = 50 }).AsTask();
+        var roots = ctx.ListRootsAsync().AsTask();
+        await Task.WhenAll(elicit, sample, roots);
+        return CallToolResult.FromText("All three answered");
+      });
+
+    server.Tools.Add(
+      new ToolDefinition("test_input_required_result_multi_round", "Asks twice, one round each.", NoArguments),
+      async (_, ctx) =>
+      {
+        var first = await ctx.ElicitAsync("What is your name?", NameForm);
+        var second = await ctx.ElicitAsync("What is your favourite colour?", NameForm);
+        return CallToolResult.FromText("Rounds: " + first.Action + ", " + second.Action);
+      });
+
+    // Asks only for what the client declared.
+    server.Tools.Add(
+      new ToolDefinition("test_input_required_result_capabilities", "Asks only for declared capabilities.", NoArguments),
+      async (_, ctx) =>
+      {
+        var asks = new List<Task>();
+        if (ctx.ClientCapabilities.Elicitation is not null)
+        {
+          asks.Add(ctx.ElicitAsync("What is your name?", NameForm).AsTask());
+        }
+
+        if (ctx.ClientCapabilities.Sampling is not null)
+        {
+          asks.Add(ctx.SampleAsync(new CreateMessageRequestParams { Messages = [new SamplingMessage { Role = "user", Content = [TextContent.Of("Say hello")] }], MaxTokens = 50 }).AsTask());
+        }
+
+        if (ctx.ClientCapabilities.Roots is not null)
+        {
+          asks.Add(ctx.ListRootsAsync().AsTask());
+        }
+
+        await Task.WhenAll(asks);
+        return CallToolResult.FromText("Asked " + asks.Count);
+      });
+
+    server.Prompts.Add(
+      new PromptDefinition("test_input_required_result_prompt", "A prompt that needs input first."),
+      async (_, ctx) =>
+      {
+        var answer = await ctx.ElicitAsync("What is your name?", NameForm);
+        return new GetPromptResult { Messages = [new PromptMessage { Role = "user", Content = TextContent.Of("Hello, action=" + answer.Action) }] };
       });
   }
 
