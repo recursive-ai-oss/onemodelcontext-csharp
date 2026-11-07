@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -117,19 +116,10 @@ internal sealed partial class CliApp
     // Signing in starts when the server first refuses the connection; a server that needs no authorization never does.
     // A new sign-in replaces what is stored, so it also widens access: the scope comes from the server's current challenge.
     await client.SignOutAsync(ct).ConfigureAwait(false);
-    var capture = new CapturingHandler(new OAuthHttpHandler(client));
-    var http = new HttpClient(capture, disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
+    var http = client.CreateHttpClient();
     _disposables.Add(http);
-    try
+    await using (await ModelContext.ConnectAsync(ContextTransport.Http(resource, http), o.Era, cancellationToken: ct).ConfigureAwait(false))
     {
-      await using (await ModelContext.ConnectAsync(ContextTransport.Http(resource, http), o.Era, cancellationToken: ct).ConfigureAwait(false))
-      {
-      }
-    }
-    catch (Exception) when (capture.Failure is { } failure)
-    {
-      // The transport reports a failed sign-in as a broken connection; the reason is the one the OAuth client gave.
-      throw failure;
     }
 
     if (await client.GetAccessTokenAsync(ct).ConfigureAwait(false) is null)
@@ -150,26 +140,6 @@ internal sealed partial class CliApp
     await client.SignOutAsync(ct).ConfigureAwait(false);
     await output.WriteLineAsync("Signed out of " + resource.GetLeftPart(UriPartial.Path) + ".").ConfigureAwait(false);
     return ExitCode.Ok;
-  }
-
-  // The HTTP transport turns an exception from the handler into a dropped connection. This keeps the OAuth client's own error, which says
-  // why signing in failed, and passes the request failure on in the form the transport expects.
-  private sealed class CapturingHandler(HttpMessageHandler inner) : DelegatingHandler(inner)
-  {
-    public OAuthException? Failure { get; private set; }
-
-    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-    {
-      try
-      {
-        return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
-      }
-      catch (OAuthException ex)
-      {
-        Failure = ex;
-        throw new HttpRequestException(ex.Message, ex);
-      }
-    }
   }
 
   // The URL carries state and a PKCE challenge, which are not secrets; it is printed so a headless user can open it elsewhere.
