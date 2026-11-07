@@ -7,6 +7,7 @@
     <IsTestProject>true</IsTestProject>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>RecursiveAI.OneModelContext.AspNetCore.Tests</RootNamespace>
+    <NoWarn>$(NoWarn);OMCX0003</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

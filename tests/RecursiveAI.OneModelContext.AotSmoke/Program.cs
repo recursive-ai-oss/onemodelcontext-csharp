@@ -103,6 +103,13 @@ if (listed is null || listed.Contains("\"title\"", StringComparison.Ordinal) || 
   return 1;
 }
 
+// The experimental extensions: tasks on a file store, skills with verification, and a server card over the listener.
+if (await ExtensionsSmoke.RunAsync() is { } extensionsFailure)
+{
+  Console.Error.WriteLine(extensionsFailure);
+  return 1;
+}
+
 // The authorization server: flow, file store, key set validation and the address guard.
 if (await AuthorizationServerSmoke.RunAsync() is { } failure)
 {

@@ -5,14 +5,6 @@ using System.Threading.Tasks;
 
 namespace RecursiveAI.OneModelContext.Extensions.Tasks;
 
-/// <summary>The ids of the experimental extensions, for <c>[Experimental]</c>.</summary>
-internal static class ExperimentalIds
-{
-  internal const string Tasks = "OMCX0001";
-  internal const string Skills = "OMCX0002";
-  internal const string ServerCards = "OMCX0003";
-}
-
 /// <summary>The states of a task (Tasks extension, "Task Status").</summary>
 [Experimental(ExperimentalIds.Tasks)]
 public static class TaskStates

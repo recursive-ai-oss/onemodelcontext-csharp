@@ -1,5 +1,7 @@
 using System.Text.Json;
 using RecursiveAI.OneModelContext;
+using RecursiveAI.OneModelContext.Extensions.ServerCards;
+using RecursiveAI.OneModelContext.Extensions.Skills;
 using RecursiveAI.OneModelContext.Extensions.Tasks;
 using RecursiveAI.OneModelContext.Protocol;
 
@@ -26,6 +28,8 @@ internal static class ConformanceContent
     AddModernDiagnostics(server);
     AddInputRequired(server);
     AddTasks(server);
+    AddSkills(server);
+    server.UseServerCard(server.CreateServerCard("io.example/conformance", "A server for the protocol's conformance suite.", "http://127.0.0.1/mcp"));
     // Suggests values that start with what was typed, from a fixed list.
     server.Completions = (request, _) =>
     {
@@ -302,6 +306,27 @@ internal static class ConformanceContent
         var answer = await ctx.ElicitAsync("What is your name?", NameForm);
         return new GetPromptResult { Messages = [new PromptMessage { Role = "user", Content = TextContent.Of("Hello, action=" + answer.Action) }] };
       });
+  }
+
+  // Two skills, one under an organizational prefix, with supporting files in nested folders, for the Skills extension scenarios.
+  private static void AddSkills(ContextServer server)
+  {
+    static byte[] Utf8(string text) => System.Text.Encoding.UTF8.GetBytes(text);
+    server.UseSkills();
+    server.AddSkill(SkillDefinition.FromFiles(
+      "pdf-processing",
+      [
+        new("SKILL.md", Utf8("---\nname: pdf-processing\ndescription: Extract, fill, and assemble PDF documents\n---\n\n# PDF processing\n\nChoose the matching template from `templates/`.\n")),
+        new("templates/invoice.md", Utf8("# Invoice\n\nCustomer:\nAmount:\n")),
+        new("templates/purchase-order.md", Utf8("# Purchase order\n\nSupplier:\nItems:\n")),
+        new("templates/regional/eu.md", Utf8("# EU\n")),
+      ]));
+    server.AddSkill(SkillDefinition.FromFiles(
+      "acme/billing/refunds",
+      [
+        new("SKILL.md", Utf8("---\nname: refunds\ndescription: Process customer refund requests per company policy\nlicense: Apache-2.0\n---\n\nSee examples/email.md.\n")),
+        new("examples/email.md", Utf8("Dear customer,\n")),
+      ]));
   }
 
   // The Tasks extension scenarios name their fixtures: a sync tool, task tools that sleep, fail, ask for input, and one that gathers input

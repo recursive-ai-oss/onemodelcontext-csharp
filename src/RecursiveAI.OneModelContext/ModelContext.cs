@@ -130,9 +130,10 @@ public static partial class ModelContext
     }
 
     using var endpoint = new StreamableHttpEndpoint(server, new StreamableHttpOptions { ResourceServer = resourceServer });
-    // The protected resource metadata is served at its well-known paths, which are not under the endpoint path (RFC 9728 section 3.1).
+    // The protected resource metadata is served at its well-known paths, which are not under the endpoint path (RFC 9728 section 3.1). A
+    // Server Card published with UseServerCard is served beside the endpoint at <path>/server-card.
     await using var http = new HttpServer(
-      exchange => exchange.Request.Path == path || (resourceServer?.IsMetadataPath(exchange.Request.Path) ?? false) ? endpoint.HandleAsync(exchange) : NotFoundAsync(exchange),
+      exchange => exchange.Request.Path == path || exchange.Request.Path == path + "/server-card" || (resourceServer?.IsMetadataPath(exchange.Request.Path) ?? false) ? endpoint.HandleAsync(exchange) : NotFoundAsync(exchange),
       new HttpServerOptions { Port = port },
       server.Options.TimeProvider);
     http.Start();

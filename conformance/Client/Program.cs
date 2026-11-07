@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using RecursiveAI.OneModelContext;
+using RecursiveAI.OneModelContext.Extensions.Skills;
 using RecursiveAI.OneModelContext.OAuth;
 using RecursiveAI.OneModelContext.Protocol;
 using RecursiveAI.OneModelContext.Wire;
@@ -26,6 +27,7 @@ var options = new ContextClientOptions
 {
   Capabilities = new ClientCapabilities { Elicitation = new ElicitationCapability() },
   RequestHandler = new Answers(),
+  Extensions = [SkillsExtension.Client()],
   EraCache = null,
   SupportedVersions = string.IsNullOrEmpty(version) ? ProtocolVersions.Supported : [version],
 };
@@ -89,6 +91,13 @@ if (scenario == "listen")
   }
 
   return seen.Contains(SubscriptionEventKind.ToolsListChanged) && seen.Contains(SubscriptionEventKind.PromptsListChanged) ? 0 : 1;
+}
+
+// The Skills extension scenarios watch how a host handles a skill: list, then load a skill and read its files only when needed, and
+// refuse content that does not match the entry. This client loads every skill it is offered and reads every file the entry lists.
+if (scenario.StartsWith("sep-2640-client", StringComparison.Ordinal))
+{
+  return await SkillsScenario.Run(client, scenario);
 }
 
 var failures = 0;
@@ -359,5 +368,80 @@ internal static class AuthScenarios
           ClientIdMetadataUrl = Ctx("client_id_metadata_url") ?? "https://conformance-test.local/client-metadata.json",
         };
     }
+  }
+}
+
+/// <summary>What the Skills extension scenarios watch a host do.</summary>
+internal static class SkillsScenario
+{
+  internal static async Task<int> Run(ContextClient client, string scenario)
+  {
+    var refused = 0;
+    var entries = await client.ListSkillsAsync();
+    Console.Error.WriteLine($"listed {entries.Count} skill(s)");
+
+    // Nobody approves a skill here, so nothing needs loading: listing alone must not cause a single file read (Skills extension,
+    // "Lazy Retrieval"). The verification scenarios below load, which is what they observe.
+    if (scenario == "sep-2640-client-no-prefetch")
+    {
+      return 0;
+    }
+
+    foreach (var listed in entries)
+    {
+      var entry = listed;
+      try
+      {
+        // Loading starts by confirming the entry with skills/get, the way a host does after the user approves a skill. A server that
+        // cannot answer it leaves the listed entry in force.
+        try
+        {
+          entry = await client.GetSkillAsync(entry.Uri);
+        }
+        catch (SkillVerificationException)
+        {
+          Console.Error.WriteLine($"skills/get gave no usable entry for {entry.Uri}; using the listed one");
+        }
+
+        var loaded = await client.LoadSkillAsync(entry);
+        Console.Error.WriteLine($"loaded {entry.Uri} ({loaded.SkillMd.Length} bytes)");
+        foreach (var file in entry.Resources ?? [])
+        {
+          if (file.Uri == entry.Uri)
+          {
+            continue;
+          }
+
+          try
+          {
+            var bytes = await client.ReadSkillFileAsync(entry, file.Uri);
+            Console.Error.WriteLine($"read {file.Uri} ({bytes.Length} bytes)");
+          }
+          catch (SkillVerificationException ex)
+          {
+            refused++;
+            Console.Error.WriteLine($"refused {file.Uri}: {ex.Failure}");
+          }
+        }
+      }
+      catch (SkillVerificationException ex)
+      {
+        // Skills extension, "Verification on Read": the content is not used; the host refreshes the entry and starts again from it.
+        refused++;
+        Console.Error.WriteLine($"refused {entry.Uri}: {ex.Failure}");
+        try
+        {
+          entry = await client.GetSkillAsync(entry.Uri);
+          Console.Error.WriteLine($"refreshed {entry.Uri}");
+        }
+        catch (SkillVerificationException)
+        {
+          Console.Error.WriteLine($"skills/get gave no usable entry for {entry.Uri}");
+        }
+      }
+    }
+
+    Console.Error.WriteLine($"done, refused {refused}");
+    return 0;
   }
 }

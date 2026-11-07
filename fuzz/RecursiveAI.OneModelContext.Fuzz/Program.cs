@@ -61,6 +61,7 @@ internal static class Program
     "listener" => ListenerTarget.Run(data),
     "sse" => RunSse(data),
     "oauth" => RunOAuth(data),
+    "skills" => RunSkills(data),
     _ => Run(data),
   };
 
@@ -96,6 +97,26 @@ internal static class Program
     catch (UriFormatException)
     {
       return 0;
+    }
+  }
+
+  // FUZZ_TARGET=skills: the YAML frontmatter reader for SKILL.md files, which a client runs on content a server sent. It must return a JSON
+  // object or refuse with FormatException; any other exception, a hang or runaway memory is a finding.
+  private static int RunSkills(ReadOnlySpan<byte> data)
+  {
+    try
+    {
+      var frontmatter = RecursiveAI.OneModelContext.Extensions.Skills.SkillYaml.ParseFrontmatter(data);
+      if (frontmatter.ValueKind != JsonValueKind.Object)
+      {
+        throw new InvalidOperationException("The frontmatter reader returned something other than an object.");
+      }
+
+      return frontmatter.GetRawText().Length;
+    }
+    catch (FormatException)
+    {
+      return -1;
     }
   }
 

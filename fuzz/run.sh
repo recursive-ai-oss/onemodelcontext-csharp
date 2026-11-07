@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the harness, instruments the library with SharpFuzz and runs a target under libFuzzer: the HTTP endpoint (default) or, with
-# FUZZ_TARGET=sse, the event-stream reader of the HTTP client, or with FUZZ_TARGET=oauth the parsers of what an OAuth client reads from a server.
+# FUZZ_TARGET=sse, the event-stream reader of the HTTP client, or with FUZZ_TARGET=oauth the parsers of what an OAuth client reads from a server, or with FUZZ_TARGET=skills the SKILL.md frontmatter reader.
 #
 #   fuzz/run.sh <seconds> [extra libFuzzer flags]
 #   fuzz/run.sh replay <file>...          run saved inputs once, without libFuzzer (reproduce a finding)
@@ -40,7 +40,7 @@ corpus="$work/corpus-$target"
 findings="$work/findings-$target"
 mkdir -p "$corpus" "$findings"
 
-seed() { [[ -e "$corpus/$1" ]] || printf "$2" > "$corpus/$1"; }
+seed() { [[ -e "$corpus/$1" ]] || printf -- "$2" > "$corpus/$1"; }
 if [[ "$target" == sse ]]; then
   # Seeds: byte 0 is the read size, then an event stream.
   seed message '\x07id: 1\nretry: 100\ndata: {"jsonrpc":"2.0","id":1,"result":{}}\n\n'
@@ -54,6 +54,13 @@ elif [[ "$target" == oauth ]]; then
   seed server '\x02{"issuer":"https://a.example","token_endpoint":"https://a.example/t","code_challenge_methods_supported":["S256"],"authorization_response_iss_parameter_supported":true}'
   seed redirect '\x03code=abc&state=s&iss=https%3A%2F%2Fi.example'
   seed redirect-error '\x03error=access_denied&state=s&iss=https%3A%2F%2Fi.example&error_description=no'
+  max_len=4096
+elif [[ "$target" == skills ]]; then
+  # SKILL.md files: frontmatter between --- lines, then a body.
+  seed plain '---\nname: x\ndescription: A skill.\n---\nBody\n'
+  seed nested '---\nname: x\ndescription: "quoted: yes"\nmetadata:\n  author: me\n  version: "1.0"\ntags: [a, b, {c: d}]\n---\n'
+  seed block '---\nname: x\ndescription: >-\n  folded text\n  continues\nnotes: |\n  literal\n\n  lines\nlist:\n  - one\n  - two: 2\n---\n'
+  seed odd '---\nname: &a x\nk: !!str 1\n? c\n: d\n<<: *a\n---\n'
   max_len=4096
 elif [[ "$target" == authorization-server ]]; then
   # Byte 0 picks the endpoint (0 authorize GET, 1 authorize POST, 2 token, 3 revoke, 4 register, 5 resume link, 6 client metadata
