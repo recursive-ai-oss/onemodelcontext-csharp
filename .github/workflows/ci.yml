@@ -83,9 +83,13 @@ jobs:
           conformance/run.sh list > "$RUNNER_TEMP/scenarios-available.txt"
       - name: Run the regression scenarios
         run: conformance/run.sh regression --out "$RUNNER_TEMP/conformance-results"
+      - name: Run the server scenarios on the built-in listener
+        run: conformance/regression-http.sh listener --out "$RUNNER_TEMP/conformance-results-listener"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: conformance-results
-          path: ${{ runner.temp }}/conformance-results
+          path: |
+            ${{ runner.temp }}/conformance-results
+            ${{ runner.temp }}/conformance-results-listener
           if-no-files-found: ignore
