@@ -1,10 +1,10 @@
 using System;
 using System.IO;
 using System.Net;
-using System.Net.Sockets;
-using System.Text;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
+using RecursiveAI.OneModelContext.Http;
 
 namespace RecursiveAI.OneModelContext.OAuth;
 
@@ -17,10 +17,8 @@ namespace RecursiveAI.OneModelContext.OAuth;
 /// </summary>
 public sealed class LoopbackRedirectReceiver : IAuthorizationUserAgent, IDisposable
 {
-  private const int MaxRequestBytes = 8 * 1024;
-  private static readonly TimeSpan RequestReadTimeout = TimeSpan.FromSeconds(10);
-
-  private readonly TcpListener _listener;
+  private readonly HttpServer _server;
+  private readonly Channel<string> _callbacks = Channel.CreateBounded<string>(new BoundedChannelOptions(8) { FullMode = BoundedChannelFullMode.DropWrite });
   private readonly Func<Uri, CancellationToken, ValueTask> _openBrowser;
   private readonly string _path;
   private readonly TimeProvider _time;
@@ -30,6 +28,7 @@ public sealed class LoopbackRedirectReceiver : IAuthorizationUserAgent, IDisposa
   /// <param name="port">The port; 0 (the default) lets the system choose.</param>
   /// <param name="path">The callback path. Default <c>/callback</c>.</param>
   /// <param name="timeProvider">The clock for <see cref="Timeout"/>; null for the system clock.</param>
+  /// <exception cref="System.Net.Sockets.SocketException">The port is in use.</exception>
   public LoopbackRedirectReceiver(Func<Uri, CancellationToken, ValueTask> openBrowser, int port = 0, string path = "/callback", TimeProvider? timeProvider = null)
   {
     ArgumentNullException.ThrowIfNull(openBrowser);
@@ -42,9 +41,22 @@ public sealed class LoopbackRedirectReceiver : IAuthorizationUserAgent, IDisposa
     _openBrowser = openBrowser;
     _path = path;
     _time = timeProvider ?? TimeProvider.System;
-    _listener = new TcpListener(IPAddress.Loopback, port);
-    _listener.Start();
-    RedirectUri = new Uri("http://127.0.0.1:" + ((IPEndPoint)_listener.LocalEndpoint).Port.ToString(System.Globalization.CultureInfo.InvariantCulture) + path);
+    _server = new HttpServer(
+      HandleAsync,
+      new HttpServerOptions
+      {
+        Address = IPAddress.Loopback,
+        Port = port,
+        MaxRequestLineBytes = 8 * 1024,
+        MaxHeaderBytes = 8 * 1024,
+        MaxRequestBodyBytes = 0,
+        MaxConnections = 8,
+        HeaderReadTimeout = TimeSpan.FromSeconds(10),
+        ShutdownGracePeriod = TimeSpan.FromSeconds(1),
+      },
+      _time);
+    _server.Start();
+    RedirectUri = new Uri("http://127.0.0.1:" + _server.LocalEndPoint!.Port.ToString(System.Globalization.CultureInfo.InvariantCulture) + path);
   }
 
   /// <inheritdoc />
@@ -57,20 +69,18 @@ public sealed class LoopbackRedirectReceiver : IAuthorizationUserAgent, IDisposa
   public async ValueTask<Uri> AuthorizeAsync(Uri authorizationUrl, CancellationToken cancellationToken)
   {
     ArgumentNullException.ThrowIfNull(authorizationUrl);
+    while (_callbacks.Reader.TryRead(out _))
+    {
+      // A redirect left over from an earlier attempt belongs to a different state value.
+    }
+
     using var timeout = new CancellationTokenSource(Timeout, _time);
     using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
     try
     {
       await _openBrowser(authorizationUrl, linked.Token).ConfigureAwait(false);
-      while (true)
-      {
-        using var connection = await _listener.AcceptTcpClientAsync(linked.Token).ConfigureAwait(false);
-        var target = await ReadCallbackAsync(connection, linked.Token).ConfigureAwait(false);
-        if (target is not null)
-        {
-          return new Uri(RedirectUri, target);
-        }
-      }
+      var query = await _callbacks.Reader.ReadAsync(linked.Token).ConfigureAwait(false);
+      return new Uri(RedirectUri, query.Length == 0 ? "" : "?" + query);
     }
     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
     {
@@ -79,63 +89,27 @@ public sealed class LoopbackRedirectReceiver : IAuthorizationUserAgent, IDisposa
   }
 
   /// <summary>Stops listening.</summary>
-  public void Dispose() => _listener.Stop();
+  public void Dispose() => _server.DisposeAsync().AsTask().GetAwaiter().GetResult();
 
-  // Returns the request target when the connection is a callback, null for anything else (which gets a 404 and is ignored).
-  private async Task<string?> ReadCallbackAsync(TcpClient connection, CancellationToken cancellationToken)
+  // Anything but GET on the callback path with a loopback Host (which also refuses DNS-rebinding names) gets a 404 and is ignored.
+  private async ValueTask HandleAsync(IHttpExchange exchange)
   {
-    using var limit = new CancellationTokenSource(RequestReadTimeout, _time);
-    using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, limit.Token);
-    var stream = connection.GetStream();
-    var buffer = new byte[MaxRequestBytes];
-    var used = 0;
-    string? line = null;
-    try
+    var request = exchange.Request;
+    var host = request.Headers.GetFirst("Host");
+    var port = RedirectUri.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    var ours = request.Method == "GET" && request.Path == _path
+      && (string.Equals(host, "127.0.0.1:" + port, StringComparison.Ordinal) || string.Equals(host, "localhost:" + port, StringComparison.OrdinalIgnoreCase));
+    if (ours)
     {
-      while (used < buffer.Length)
-      {
-        var n = await stream.ReadAsync(buffer.AsMemory(used), linked.Token).ConfigureAwait(false);
-        if (n == 0)
-        {
-          break;
-        }
-
-        used += n;
-        var end = Array.IndexOf(buffer, (byte)'\n', 0, used);
-        if (end >= 0)
-        {
-          line = Encoding.ASCII.GetString(buffer, 0, end).TrimEnd('\r');
-          break;
-        }
-      }
-    }
-    catch (Exception ex) when (ex is IOException or SocketException or OperationCanceledException && !cancellationToken.IsCancellationRequested)
-    {
-      return null;
+      _callbacks.Writer.TryWrite(request.Query);
     }
 
-    string? target = null;
-    var parts = line?.Split(' ');
-    if (parts is { Length: 3 } && parts[0] == "GET" && parts[1].StartsWith(_path, StringComparison.Ordinal)
-      && (parts[1].Length == _path.Length || parts[1][_path.Length] == '?'))
-    {
-      target = parts[1];
-    }
-
-    var body = target is null ? "Not found." : "You can close this window and return to the application.";
-    var response = Encoding.ASCII.GetBytes(
-      (target is null ? "HTTP/1.1 404 Not Found\r\n" : "HTTP/1.1 200 OK\r\n")
-      + "Content-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\nContent-Length: "
-      + body.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\r\n\r\n" + body);
-    try
-    {
-      await stream.WriteAsync(response, linked.Token).ConfigureAwait(false);
-    }
-    catch (Exception ex) when (ex is IOException or SocketException or OperationCanceledException && !cancellationToken.IsCancellationRequested)
-    {
-      // The browser went away after sending the redirect; the redirect is still good.
-    }
-
-    return target;
+    var body = ours ? "You can close this window and return to the application."u8.ToArray() : "Not found."u8.ToArray();
+    var response = exchange.Response;
+    response.StatusCode = ours ? 200 : 404;
+    response.SetHeader("Content-Type", "text/plain; charset=utf-8");
+    response.SetHeader("Cache-Control", "no-store");
+    response.SetHeader("Referrer-Policy", "no-referrer");
+    await response.Body.WriteAsync(body, exchange.Aborted).ConfigureAwait(false);
   }
 }

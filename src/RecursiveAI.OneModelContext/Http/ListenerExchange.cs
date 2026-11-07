@@ -22,6 +22,8 @@ internal sealed class ListenerRequest : IHttpRequest
 
   public string Path => _head.Path;
 
+  public string Query => _head.Query;
+
   public HttpHeaders Headers => _head.Headers;
 
   public long? ContentLength => _head.ContentLength;

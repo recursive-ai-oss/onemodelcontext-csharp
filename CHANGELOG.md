@@ -23,3 +23,4 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
   and `Last-Event-ID` resumption, a client-only fallback to the deprecated HTTP+SSE transport, an SSE reader with bounded events, a hook
   for adding credentials to every request, and `subscriptions/listen` on the client. See `docs/http-client.md`.
 - `ModelContext.ConnectAsync("https://...")` connects a URL over Streamable HTTP, with the same callbacks as a command line.
+- The OAuth 2.1 client (`OAuthClient`, `OAuthHttpHandler`, `LoopbackRedirectReceiver`, `ITokenStore` with memory and file stores): discovery, Client ID Metadata Documents, pre-registered and dynamic registration, PKCE, `resource`, RFC 9207 `iss` checks, step-up, refresh, Client Credentials and Enterprise-Managed Authorization; `AuthorizationException` for 401 and 403 on the HTTP client; `IHttpRequest.Query`. See `docs/oauth-client.md`.

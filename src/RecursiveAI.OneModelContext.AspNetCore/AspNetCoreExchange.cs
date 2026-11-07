@@ -59,6 +59,9 @@ internal sealed class AspNetCoreExchange : IHttpExchange
 
     public string Path => _inner.Path.Value ?? "/";
 
+    // QueryString.Value keeps the leading '?'.
+    public string Query => _inner.QueryString.HasValue ? _inner.QueryString.Value![1..] : "";
+
     public HttpHeaders Headers { get; } = new();
 
     public long? ContentLength => _inner.ContentLength;

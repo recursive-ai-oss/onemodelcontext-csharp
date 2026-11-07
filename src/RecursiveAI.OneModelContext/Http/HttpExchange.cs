@@ -84,6 +84,9 @@ public interface IHttpRequest
   /// <summary>The request path, without the query.</summary>
   string Path { get; }
 
+  /// <summary>The raw query string without the leading <c>?</c>, still percent-encoded; empty when the request has none. Default empty for hosts that do not say.</summary>
+  string Query => "";
+
   /// <summary>The headers.</summary>
   HttpHeaders Headers { get; }
 

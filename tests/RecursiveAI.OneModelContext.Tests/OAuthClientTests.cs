@@ -657,7 +657,7 @@ public class OAuthClientTests
   public void The_oauth_layer_references_no_protocol_types()
   {
     // Like the JSON-RPC layer, OAuth must stay reusable for other protocols: nothing in its namespace may mention a type from another
-    // namespace of this library.
+    // namespace of this library except the HTTP/1.1 base layer, which holds no protocol types either.
     const string BaseNamespace = "RecursiveAI.OneModelContext.OAuth";
     var assembly = typeof(OAuthClient).Assembly;
     var offenders = new List<string>();
@@ -680,7 +680,7 @@ public class OAuthClientTests
         Check(type.GetElementType(), where);
       }
 
-      if (type.Assembly == assembly && type.Namespace is { } ns && ns != BaseNamespace && ns.StartsWith("RecursiveAI.OneModelContext", StringComparison.Ordinal))
+      if (type.Assembly == assembly && type.Namespace is { } ns && ns != BaseNamespace && ns != "RecursiveAI.OneModelContext.Http" && ns.StartsWith("RecursiveAI.OneModelContext", StringComparison.Ordinal))
       {
         offenders.Add(where + " -> " + type.FullName);
       }
@@ -814,6 +814,30 @@ public class OAuthClientTests
     Assert.Equal(receiver.RedirectUri.AbsolutePath, callback.AbsolutePath);
     Assert.Equal("abc", AuthorizationResponse.ParseQuery(callback.Query, out _)["code"]);
     Assert.True(receiver.RedirectUri.IsLoopback);
+  }
+
+  [Fact]
+  public async Task The_loopback_receiver_ignores_a_callback_sent_to_a_foreign_host_name()
+  {
+    LoopbackRedirectReceiver? created = null;
+    using var receiver = new LoopbackRedirectReceiver((url, token) =>
+    {
+      _ = Task.Run(async () =>
+      {
+        using var browser = new HttpClient();
+        using var rebound = new HttpRequestMessage(HttpMethod.Get, new Uri(created!.RedirectUri, "/callback?code=evil&state=x"));
+        rebound.Headers.Host = "attacker.example:" + created.RedirectUri.Port;
+        using var refused = await browser.SendAsync(rebound, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, refused.StatusCode);
+        using var done = await browser.GetAsync(new Uri(created.RedirectUri, "/callback?code=good"), TestContext.Current.CancellationToken);
+      }, token);
+      return ValueTask.CompletedTask;
+    });
+    created = receiver;
+
+    var callback = await receiver.AuthorizeAsync(new Uri("https://auth.example/authorize"), TestContext.Current.CancellationToken);
+
+    Assert.Equal("good", AuthorizationResponse.ParseQuery(callback.Query, out _)["code"]);
   }
 
   private sealed class XorProtector : ITokenProtector

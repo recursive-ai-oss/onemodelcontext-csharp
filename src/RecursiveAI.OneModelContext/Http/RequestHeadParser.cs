@@ -16,6 +16,9 @@ internal sealed class RequestHead
 
   internal required string Path { get; init; }
 
+  /// <summary>The query string without the leading '?', left percent-encoded (the handler decodes what it reads).</summary>
+  internal string Query { get; init; } = "";
+
   internal required HttpHeaders Headers { get; init; }
 
   internal required bool Http11 { get; init; }
@@ -299,6 +302,7 @@ internal static class RequestHeadParser
     {
       Method = Encoding.ASCII.GetString(methodBytes),
       Path = path,
+      Query = question < 0 ? "" : Encoding.ASCII.GetString(target[(question + 1)..]),
       Headers = headers,
       Http11 = http11,
       ContentLength = length,
