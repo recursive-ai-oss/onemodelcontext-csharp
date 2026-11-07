@@ -4,6 +4,11 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+### Fixed
+
+- Stdio and stream servers finish admitted requests after input EOF before closing their output. `EndOfStreamTimeout` gives handlers a
+  5-second grace period before cancellation; shutdown still has a bounded wait for handlers that ignore cancellation.
+
 ### Changed
 
 - OAuth client hardening: a client secret, signing key or identity assertion is sent only to an issuer the application pinned (`ExpectedIssuer`, `PreRegisteredClient.Issuer`; error `issuer_required`); the loopback receiver ignores callbacks whose `state` is not the one in progress; a stale process adopts a refresh token another process rotated; plain-HTTP OAuth endpoints are allowed only for loopback resources; `OAuthClientOptions.HttpHandler` replaces `HttpClient` and must not follow redirects; a token file that cannot be read or is group/world-writable is never overwritten; a scope-less `insufficient_scope` no longer starts an authorization per request (`StepUpCooldown`). CLI: `--issuer`, secrets from `env:NAME`, `-` or `@file`, and `login` replaces stored tokens only after the new sign-in succeeds.

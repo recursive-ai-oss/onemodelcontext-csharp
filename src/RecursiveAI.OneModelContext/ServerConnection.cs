@@ -27,6 +27,7 @@ internal sealed class ServerConnection : IServerSink, IAsyncDisposable
       HandlerFaulted = ex => ContextDiagnostics.Publish(DiagnosticKind.HandlerFault, "A request handler threw " + ex.GetType().Name + ".", null, ex),
       MaxConcurrentRequests = server.Options.MaxConcurrentRequests,
       RequestTimeout = server.Options.RequestTimeout,
+      EndOfStreamTimeout = server.Options.EndOfStreamTimeout,
       ReaderOptions = server.Options.ReaderOptions,
       TimeProvider = server.Options.TimeProvider,
     });

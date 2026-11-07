@@ -40,6 +40,12 @@ public sealed class ContextServerOptions
   /// <summary>How long a server-initiated request waits for the client's answer. Default 5 minutes.</summary>
   public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromMinutes(5);
 
+  /// <summary>
+  /// Grace after stdio or stream input EOF for admitted requests to finish and queue their responses before cancellation.
+  /// Default 5 seconds; zero cancels immediately. Explicit cancellation skips the grace; shutdown then waits at most 5 seconds for cancelled handlers.
+  /// </summary>
+  public TimeSpan EndOfStreamTimeout { get; init; } = TimeSpan.FromSeconds(5);
+
   /// <summary>Limits applied to every incoming message.</summary>
   public JsonRpcReaderOptions ReaderOptions { get; init; } = new();
 
