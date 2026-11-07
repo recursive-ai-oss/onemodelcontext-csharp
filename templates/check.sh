@@ -36,6 +36,19 @@ for variant in "server stdio" "server http" "client"; do
   printf '<configuration><packageSources><clear /><add key="local" value="%s" /><add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources></configuration>\n' "$work/feed" >"$dir/nuget.config"
   dotnet build "$dir" -c Release -o "$dir/out" -v quiet -clp:NoSummary -warnaserror
   echo "built $name"
+  if [ "$kind$transport" = serverhttp ]; then
+    dotnet "$dir/out/$name.dll" "${HTTP_PORT:-47810}" &
+    pid=$!
+    sleep 3
+    code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' \
+      "http://127.0.0.1:${HTTP_PORT:-47810}/mcp")
+    kill "$pid"; wait "$pid" 2>/dev/null || true
+    [ "$code" = 200 ] || { echo "http variant answered $code"; exit 1; }
+    echo "http variant answered initialize"
+    dotnet publish "$dir" -c Release -o "$dir/aot" -v quiet -clp:NoSummary -warnaserror
+    echo "published $name with NativeAOT"
+  fi
   if [ "$kind$transport" = serverstdio ]; then
     dotnet publish "$dir" -c Release -o "$dir/aot" -v quiet -clp:NoSummary -warnaserror
     echo "published $name with NativeAOT"

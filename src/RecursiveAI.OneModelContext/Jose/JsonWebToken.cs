@@ -78,9 +78,10 @@ public sealed class JsonWebToken
   private readonly byte[] _signingInput;
   private readonly byte[] _signature;
 
-  private JsonWebToken(string algorithm, string? keyId, JsonElement payload, byte[] signingInput, byte[] signature)
+  private JsonWebToken(string algorithm, string? keyId, string? type, JsonElement payload, byte[] signingInput, byte[] signature)
   {
     Algorithm = algorithm;
+    Type = type;
     KeyId = keyId;
     Payload = payload;
     _signingInput = signingInput;
@@ -92,6 +93,9 @@ public sealed class JsonWebToken
 
   /// <summary>The header's <c>kid</c>, or null.</summary>
   public string? KeyId { get; }
+
+  /// <summary>The header's <c>typ</c>, or null (RFC 7515 section 4.1.9). Compare it before trusting the token for a purpose, as RFC 8725 section 3.11 asks.</summary>
+  public string? Type { get; }
 
   /// <summary>The claims set (a JSON object). Untrusted until <see cref="VerifySignature"/> succeeds.</summary>
   public JsonElement Payload { get; }
@@ -140,6 +144,7 @@ public sealed class JsonWebToken
       }
 
       var kid = h.TryGetProperty("kid", out var k) && k.ValueKind == JsonValueKind.String ? k.GetString() : null;
+      var typ = h.TryGetProperty("typ", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
       using var payloadDoc = JsonDocument.Parse(payload, new JsonDocumentOptions { MaxDepth = 16 });
       if (payloadDoc.RootElement.ValueKind != JsonValueKind.Object)
       {
@@ -149,7 +154,7 @@ public sealed class JsonWebToken
       // The signature covers the ASCII of the first two segments exactly as received (RFC 7515 section 5.2, step 8).
       var input = Encoding.ASCII.GetBytes(token[..second]);
       error = JwtParseError.None;
-      return new JsonWebToken(alg.GetString()!, kid, payloadDoc.RootElement.Clone(), input, signature);
+      return new JsonWebToken(alg.GetString()!, kid, typ, payloadDoc.RootElement.Clone(), input, signature);
     }
     catch (Exception ex) when (ex is FormatException or JsonException or ArgumentException)
     {

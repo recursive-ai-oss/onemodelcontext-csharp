@@ -11,6 +11,8 @@ Small programs that show how OneModelContext is used. Each one runs on both prot
 | [`Explorer`](Explorer) | A client for any stdio server: connect (the era is negotiated), list tools, call one, read a resource, get a prompt, answer the server's questions from typed host callbacks (`OnConfirm`, `OnElicit`). Connects with `ModelContext.ConnectAsync("<command>", onConfirm: ...)`. | yes |
 | [`QuickPath`](QuickPath) | The reflection quick path: tools, a resource and a prompt from lambdas, for trying things out. Not trimmable and not NativeAOT. | no |
 | [`HttpServer`](HttpServer) | Two tools served on the built-in HTTP listener with `ModelContext.ServeHttpAsync` (loopback only). | yes |
+| [`HostedServer`](HostedServer) | A generic-host app serving a tool class whose constructor takes a service from the container, over stdio, with `services.AddContextServer<Greeter>().UseStdio()`. The host stops when the client hangs up. | yes |
+| [`ChatTools`](ChatTools) | A server's tools handed to a function-calling `IChatClient` with `client.ToAIFunctionsAsync()`, on each protocol era. Uses a scripted chat client; swap in a real one. | yes |
 | [`StdioServer`](StdioServer) | A notebook server with tools, a resource template and a prompt. | yes |
 
 ## Running them

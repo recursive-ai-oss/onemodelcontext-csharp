@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>$(PackagePrefix).OneModelContext.Hosting</AssemblyName>
+    <RootNamespace>RecursiveAI.OneModelContext.Hosting</RootNamespace>
+    <PackageId>$(PackagePrefix).OneModelContext.Hosting</PackageId>
+    <IsPackable>true</IsPackable>
+    <IsTrimmable>true</IsTrimmable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <Description>Generic host integration for OneModelContext: a .NET SDK for the Model Context Protocol®. AddContextServer registers a server with DI-resolved tool classes, hosted stdio and listener lifetimes and an ILogger bridge; AddContextClient registers a client for apps that consume a server. Pre-release; unpublished. Unaffiliated with 1MCP, the Go OneMCP aggregator and the Model Context Protocol project.</Description>
+  </PropertyGroup>
+
+  <!-- The adapter's only dependencies are the core package and the hosting abstractions (which bring the DI and logging abstractions). -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <ProjectReference Include="../RecursiveAI.OneModelContext/RecursiveAI.OneModelContext.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="RecursiveAI.OneModelContext.AdapterTests" />
+  </ItemGroup>
+
+</Project>
