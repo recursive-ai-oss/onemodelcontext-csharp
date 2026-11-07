@@ -484,7 +484,8 @@ internal sealed class ClassEmitter
         if (shape is TypeShape.Dictionary or TypeShape.Object)
         {
           var (_, policy) = _mapper.FindMetadata(type, location);
-          outputSchema = _mapper.Map(plain, policy != NamingPolicy.None, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default), location);
+          // A nullable result still has an object schema: outputSchema.type must be "object" (2025-06-18 and later); null goes out as content only.
+          outputSchema = _mapper.Map(plain.WithNullableAnnotation(NullableAnnotation.NotAnnotated), policy != NamingPolicy.None, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default), location);
           plan.Map = v => Core + ".Binding.ToolResults.Structured<" + typeText + ">(" + v + ", " + info + ")";
         }
         else

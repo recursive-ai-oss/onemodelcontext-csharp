@@ -57,7 +57,7 @@ public static class ContextServerReflectionExtensions
       && returnType != typeof(CallToolResult) && !ReflectionSchema.IsContentSequence(returnType);
     var definition = new ToolDefinition(name, description ?? method.GetCustomAttribute<DescriptionAttribute>()?.Description, ToolResults.Schema(schema.ToJson()))
     {
-      OutputSchema = structured ? ToolResults.Schema(ReflectionSchema.ForType(returnType, false, []).ToJson()) : default,
+      OutputSchema = structured ? ToolResults.Schema(ReflectionSchema.ForType(Nullable.GetUnderlyingType(returnType) ?? returnType, false, []).ToJson()) : default,
     };
 
     server.Tools.Add(definition, async (arguments, context) =>

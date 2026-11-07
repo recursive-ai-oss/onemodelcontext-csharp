@@ -127,6 +127,12 @@ public partial class SignatureTools
   }
 
   [Tool]
+  public static Task<Receipt?> FindReceipt(string id) => Task.FromResult<Receipt?>(id == "none" ? null : new Receipt(id, 1));
+
+  [Tool(Description = "Don't <panic> & carry on.")]
+  public static string Quote() => "it's <fine>";
+
+  [Tool]
   public static ValueTask<int> Square(int n) => ValueTask.FromResult(n * n);
 
   [Tool]

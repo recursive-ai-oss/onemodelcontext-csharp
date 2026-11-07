@@ -284,6 +284,53 @@ public class GeneratedToolTests
     Assert.Equal(JsonValueKind.Undefined, many.Structured.ValueKind);
   }
 
+  private const string ReceiptOutputSchema =
+    """{"type":"object","properties":{"id":{"type":"string"},"total":{"type":"integer","minimum":-2147483648,"maximum":2147483647}},"required":["id","total"],"additionalProperties":false}""";
+
+  [Fact]
+  public async Task A_nullable_object_return_keeps_an_object_output_schema_and_null_is_content_only()
+  {
+    var server = NewServer();
+    await using var session = await Session.StartAsync(server);
+    var listed = (await session.Client.ListToolsAsync(TestContext.Current.CancellationToken)).ToDictionary(t => t.Name);
+    Assert.Equal(ReceiptOutputSchema, listed["find_receipt"].OutputSchema.GetRawText());
+
+    var none = await session.CallAsync("find_receipt", """{"id":"none"}""");
+    Assert.Equal("null", none.Text);
+    Assert.Equal(JsonValueKind.Undefined, none.Structured.ValueKind);
+    var found = await session.CallAsync("find_receipt", """{"id":"a"}""");
+    Assert.Equal("a", found.Structured.GetProperty("id").GetString());
+  }
+
+  [Fact]
+  public async Task Legacy_clients_see_object_output_schemas()
+  {
+    var server = new ContextServer("generated", "1.0");
+    new SignatureTools().AddTo(server);
+    var (a, b) = PipeEnd.CreatePair();
+    var serving = server.RunAsync(ContextTransport.Stream(a), TestContext.Current.CancellationToken);
+    await using var client = await ContextClient.ConnectAsync(
+      ContextTransport.Stream(b),
+      new ContextClientOptions { Era = EraPreference.Legacy },
+      TestContext.Current.CancellationToken);
+    Assert.Equal(ProtocolEra.Legacy, client.Era);
+    var listed = (await client.ListToolsAsync(TestContext.Current.CancellationToken)).ToDictionary(t => t.Name);
+    Assert.Equal(ReceiptOutputSchema, listed["find_receipt"].OutputSchema.GetRawText());
+    Assert.Equal(ReceiptOutputSchema, listed["make_receipt"].OutputSchema.GetRawText());
+    Assert.Equal(JsonValueKind.Undefined, listed["make_receipts"].OutputSchema.ValueKind);
+    Assert.False(serving.IsFaulted);
+  }
+
+  [Fact]
+  public void Schema_text_keeps_apostrophes_and_angle_brackets_readable_on_the_wire()
+  {
+    var server = NewServer();
+    Assert.True(server.Tools.TryGet("quote", out var definition, out _));
+    var wire = global::RecursiveAI.OneModelContext.JsonRpc.JsonRpcWriter.ToJson(new global::RecursiveAI.OneModelContext.JsonRpc.JsonRpcResultResponse(global::RecursiveAI.OneModelContext.JsonRpc.JsonRpcId.FromNumber(1), JsonSerializer.SerializeToElement(definition.ToTool(), WireJsonContext.Default.Tool)));
+    Assert.Contains("Don't <panic> & carry on.", wire, StringComparison.Ordinal);
+    Assert.DoesNotContain('\n', wire);
+  }
+
   [Fact]
   public async Task Returns_map_to_content()
   {
