@@ -19,7 +19,8 @@ if ! command -v node > /dev/null 2>&1; then
     os=linux; [ "$(uname -s)" = Darwin ] && os=darwin
     tarball="node-v$NODE_VERSION-$os-$arch.tar.xz"; [ "$os" = darwin ] && tarball="node-v$NODE_VERSION-$os-$arch.tar.gz"
     mkdir -p "$INTEROP_CACHE/node"
-    curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/$tarball" | tar -xf - -C "$INTEROP_CACHE/node" --strip-components=1
+    compression=J; [ "$os" = darwin ] && compression=z
+    curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/$tarball" | tar -x"$compression"f - -C "$INTEROP_CACHE/node" --strip-components=1
   fi
   export PATH="$INTEROP_CACHE/node/bin:$PATH"
 fi
