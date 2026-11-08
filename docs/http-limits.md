@@ -58,7 +58,7 @@ property of `HttpServerOptions`.
 | `HeaderReadTimeout` | 10 s | From the first byte of a request to the end of its head (and for the TLS handshake). Slower gets 408. A sender that trickles bytes still hits it. |
 | `RequestTimeout` | 30 s | From the end of the head to the end of the body. Slower gets 408. |
 | `WriteTimeout` | 30 s | One write to the peer. A client that stops reading is dropped. |
-| `ShutdownGracePeriod` | 5 s | How long `DisposeAsync` waits for handlers after cancelling them. |
+| `ShutdownGracePeriod` | 5 s | How long `DisposeAsync` waits for handlers after canceling them. |
 
 ## What is refused
 
@@ -75,11 +75,11 @@ Each of these gets 400 (unless stated), is answered with `Connection: close`, an
 
 Chunk extensions are read and ignored (RFC 9112 section 7.1.1) and trailers are read and dropped, both bounded.
 
-## Connection behaviour
+## Connection behavior
 
 - Keep-alive on HTTP/1.1; HTTP/1.0 connections close after the response. Pipelined requests are answered in order, one at a time.
 - A handler that does not read the whole request body leaves the connection open only if the rest is at most 64 KiB; otherwise it closes.
-- `IHttpExchange.Aborted` is cancelled when the peer closes the connection, including closing only its sending side, or the server
+- `IHttpExchange.Aborted` is canceled when the peer closes the connection, including closing only its sending side, or the server
   stops. While a handler runs with a pipelined request already waiting, a hang-up is not watched for.
 - Every accepted socket has TCP keep-alive probes on (first after 60 s, then every 15 s, 4 misses), so a peer that vanished is evicted; the TLS close notification is bounded to 2 s.
 - Error responses the listener writes itself carry `X-Content-Type-Options: nosniff`.

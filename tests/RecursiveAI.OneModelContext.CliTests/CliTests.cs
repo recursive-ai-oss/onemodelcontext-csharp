@@ -39,7 +39,10 @@ public sealed class CliTests
     Assert.Equal(0, code);
     Assert.True(text.Contains($"protocol: {version} ({expected} era)", StringComparison.Ordinal), text + "\n" + string.Join("\n", NegotiationNotes));
     Assert.Contains("echo", text);
+    Assert.Contains("resources (1):", text);
+    Assert.Contains("resource templates (1):", text);
     Assert.Contains("test://hello", text);
+    Assert.Contains("test://{name}", text);
     Assert.Contains("greet", text);
     Assert.Contains(era == "auto" ? "server/discover" : "pinned by --era " + era, text);
   }

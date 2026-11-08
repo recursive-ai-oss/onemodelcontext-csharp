@@ -225,7 +225,7 @@ public sealed class JwtValidatorTests : IDisposable
   }
 
   [Fact]
-  public async Task A_jwks_with_only_eddsa_keys_names_the_adapter_that_handles_them()
+  public async Task A_jwks_with_only_eddsa_keys_explains_the_custom_validator_workaround()
   {
     _jwks = "{\"keys\":[" + TestIssuer.EdwardsJwk("ed-1") + "]}";
     _handler = new StubHandler(_ => StubHandler.Json(_jwks));
@@ -233,12 +233,12 @@ public sealed class JwtValidatorTests : IDisposable
     _validator = new JwtTokenValidator(TestIssuer.Issuer, _provider, _time);
 
     var signedWithRsaByAnotherParty = await Validate(_issuer.Mint(kid: "ed-1", time: _time));
-    AssertRefused(signedWithRsaByAnotherParty, "RecursiveAI.OneModelContext.OneCrypto");
+    AssertRefused(signedWithRsaByAnotherParty, "Use a custom ITokenValidator or DelegateTokenValidator; OneCrypto-based support is planned.");
 
     // A token that says EdDSA gets the same pointer, however the JWKS looks.
     var header = TestIssuer.B64(Encoding.UTF8.GetBytes("""{"alg":"EdDSA","kid":"ed-1"}"""));
     var payload = TestIssuer.B64(Encoding.UTF8.GetBytes("""{"iss":"https://issuer.test"}"""));
-    AssertRefused(await Validate(header + "." + payload + "." + TestIssuer.B64(new byte[64])), "RecursiveAI.OneModelContext.OneCrypto");
+    AssertRefused(await Validate(header + "." + payload + "." + TestIssuer.B64(new byte[64])), "Use a custom ITokenValidator or DelegateTokenValidator; OneCrypto-based support is planned.");
   }
 
   [Theory]

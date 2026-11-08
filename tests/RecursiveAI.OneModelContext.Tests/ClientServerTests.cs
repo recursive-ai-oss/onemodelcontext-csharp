@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using RecursiveAI.OneModelContext.Diagnostics;
@@ -47,6 +48,28 @@ public class ClientServerTests
 
   private static ContextServer NewServer() =>
     new("e2e", "1.0", new ContextServerOptions { Codecs = [new TestServerCodec(ProtocolEra.Modern, ProtocolVersions.V20260728)] });
+
+  [Theory]
+  [InlineData("2026-07-28")]
+  [InlineData("2025-11-25")]
+  [InlineData("2025-06-18")]
+  [InlineData("2025-03-26")]
+  [InlineData("2024-11-05")]
+  public async Task Tool_argument_overloads_preserve_objects_and_existing_call_shapes(string version)
+  {
+    var server = new ContextServer("arguments", "1");
+    server.Tools.Add(new ToolDefinition("echo", "Echoes arguments.", ObjectSchema), (args, _) =>
+      ValueTask.FromResult(CallToolResult.FromText(args.ValueKind == JsonValueKind.Undefined ? "none" : args.GetRawText())));
+    await using var pair = await ConnectAsync(server, new ContextClientOptions { SupportedVersions = [version] });
+    var ct = TestContext.Current.CancellationToken;
+    Assert.Equal(version, pair.Client.ProtocolVersion);
+    Assert.Equal("{\"path\":\"README.md\"}", (await pair.Client.CallToolAsync("echo", new { path = "README.md" }, ct)).Text);
+    Assert.Equal("{\"path\":\"README.md\"}", (await pair.Client.CallToolAsync("echo", new ToolArguments("README.md"), ToolArgumentsJson.Default.ToolArguments, ct)).Text);
+    Assert.Equal("{\"path\":\"a\"}", (await pair.Client.CallToolAsync("echo", Json.Parse("{\"path\":\"a\"}"), ct)).Text);
+    Assert.Equal("{}", (await pair.Client.CallToolAsync("echo", cancellationToken: ct)).Text);
+    Assert.Equal("{}", (await pair.Client.CallToolAsync("echo", default, ct)).Text);
+    Assert.Equal("{}", (await pair.Client.CallToolAsync("echo", default, progress: null, cancellationToken: ct)).Text);
+  }
 
   [Fact]
   public async Task The_client_lists_and_calls_what_the_server_registered()
@@ -489,4 +512,11 @@ public class BaseLayerTests
     // The text of the base layer's own sources is checked the same way by the build: no "using" of the protocol namespaces is possible
     // without a type from them showing up above.
   }
+}
+
+public sealed record ToolArguments(string path);
+
+[JsonSerializable(typeof(ToolArguments))]
+internal sealed partial class ToolArgumentsJson : JsonSerializerContext
+{
 }

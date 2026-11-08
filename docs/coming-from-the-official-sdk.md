@@ -43,7 +43,7 @@ write here. Samples with the same names live in [`samples/`](../samples/README.m
 | Sign in on the client | `ClientOAuthOptions` on the HTTP transport | `OAuthClient` and its `CreateHttpClient()`; see [oauth-client.md](oauth-client.md) |
 | Inspect a server from a shell | the Inspector | the Inspector, or `onemodelcontext inspect <server>` / `call` / `read` / `prompt` |
 
-## Behaviour that differs
+## Behavior that differs
 
 - **The protocol era is negotiated for you.** The client probes the modern revision (2026-07-28) and falls back to `initialize` for older
   servers; a server answers both on one endpoint. Write handlers against the modern semantics. `--era` / `ContextClientOptions.Era` pins one.
@@ -67,6 +67,7 @@ public identifiers, so names differ:
 
 A project that references both libraries can keep them apart with namespace aliases:
 
+<!-- compile-skip: Namespace-alias illustration requiring a separate official SDK reference, not a runnable example. -->
 ```csharp
 using Official = ModelContextProtocol.Client;
 using OneModelContext = RecursiveAI.OneModelContext;

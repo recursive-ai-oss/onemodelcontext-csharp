@@ -285,7 +285,8 @@ internal sealed partial class CliApp(TextWriter output, TextWriter error, TextRe
         text.Append("  ").Append(r.Uri).Append(Render.Summary(r.Description ?? r.Name)).AppendLine();
       }
 
-      foreach (var r in templates!)
+      text.Append(render.Heading("resource templates")).Append(" (").Append(templates!.Count.ToString(CultureInfo.InvariantCulture)).AppendLine("):");
+      foreach (var r in templates)
       {
         text.Append("  ").Append(r.UriTemplate).Append(Render.Summary(r.Description ?? r.Name)).AppendLine(" (template)");
       }

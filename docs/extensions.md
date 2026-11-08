@@ -44,7 +44,7 @@ the extension**; others get method-not-found (-32601). The client calls them wit
 
 ### Degradation and required mode
 
-By default a peer without the extension just gets the plain behaviour. `Required = true` on the registration rejects requests from peers that
+By default a peer without the extension just gets the plain behavior. `Required = true` on the registration rejects requests from peers that
 lack it: **-32021** `MissingRequiredClientCapability` on 2026-07-28; on the legacy revisions, which define no such code, the existing
 invalid-params mapping (**-32602**) with a message naming the extension. A `ClientExtension` with `Required = true` makes `ConnectAsync` throw
 `ExtensionRequiredException` when the server lacks it.
@@ -68,7 +68,7 @@ server.AddAppTool(definition, "ui://weather/forecast", handler, visibility: ["mo
 From the generator: `[Tool(UiResource = "ui://weather/forecast", UiVisibility = new[] { "model", "app" })]` (a bad URI or visibility is
 compile error OMCG0012). Register the resource with `AddUiResource`.
 
-Behaviour:
+Behavior:
 - A peer supports Apps only if its extension settings list `text/html;profile=mcp-app` in `mimeTypes`. For any other peer `_meta.ui` is
   removed from tools, **app-only tools are hidden and cannot be called** (unknown tool, -32602), and the handler can return a text fallback
   (`context.SupportsApps()`).
@@ -78,11 +78,11 @@ Behaviour:
 - `UiContentSecurityPolicy` builds the CSP and permission metadata and refuses values that could break out of the header. The secure default
   allows no external origins.
 - UI resources appear in `resources/list`; read them with `client.ReadUiResourceAsync(uri)`, and `tool.GetUi()` gives a tool's UI metadata.
-- `ui/initialize` is modelled with `clientInfo` and `appCapabilities`; fields the types do not know are preserved.
+- `ui/initialize` is modeled with `clientInfo` and `appCapabilities`; fields the types do not know are preserved.
 
 See `samples/AppsServer`.
 
-The suite version pinned for this repository has no Apps or extension-negotiation scenarios; the behaviour is covered by unit tests on
+The suite version pinned for this repository has no Apps or extension-negotiation scenarios; the behavior is covered by unit tests on
 both eras.
 
 ## Experimental extensions
@@ -162,7 +162,7 @@ server.AddSkill(SkillDefinition.FromDirectory("skills/refunds", pathPrefix: "acm
   `SkillVerificationException` (`Failure` says which) and the content is not returned. Recover by fetching the entry again with
   `GetSkillAsync`; a changed file set voids any approval your host stored. Nothing is fetched ahead of need.
 - A digest match shows that content and entry agree, not that either is trustworthy: both come from the same server. Treat skill content as
-  untrusted model input, tag it with the server it came from, and do not honour `allowed-tools` from it without the user's approval.
+  untrusted model input, tag it with the server it came from, and do not honor `allowed-tools` from it without the user's approval.
 - Not built: skills with generated ("dynamic") content on the server side; clients read them but get no integrity check.
 
 ### Server Cards

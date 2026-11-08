@@ -46,7 +46,7 @@ and host and drops a default port, and is otherwise exact. A token is never pass
 
 | Validator | Notes |
 |---|---|
-| `JwtTokenValidator` | RS/PS/ES 256, 384 and 512 on BCL crypto. `iss` exact, `aud` = the resource, `exp` required, `nbf`/`iat` with at most 5 minutes of skew (default 60 s). Everything else, `none` and HMAC included, is refused. An EdDSA-only issuer needs the `RecursiveAI.OneModelContext.OneCrypto` package and the failure says so. |
+| `JwtTokenValidator` | RS/PS/ES 256, 384 and 512 on BCL crypto. `iss` exact, `aud` = the resource, `exp` required, `nbf`/`iat` with at most 5 minutes of skew (default 60 s). Everything else, `none` and HMAC included, is refused. For EdDSA issuers, supply a custom `ITokenValidator` or `DelegateTokenValidator`; OneCrypto-based support is planned. |
 | `HttpJwksProvider` | HTTPS only (HTTP on loopback), no redirects, 256 KiB and 10 s limits, cached 10 minutes. An unknown `kid` triggers one refetch, never more than one fetch per 30 s. A failed refresh keeps serving the cached keys. |
 | `IntrospectionTokenValidator` | RFC 7662, HTTP Basic or bearer client authentication. Needs `active: true` and an `aud` naming the resource. Active answers are cached for at most 60 s and never past `exp`; inactive ones are not cached. |
 | `StaticTokenValidator` | Per-user opaque tokens kept as SHA-256 hashes; every entry is compared in constant time. Tokens must be at least 16 characters. |

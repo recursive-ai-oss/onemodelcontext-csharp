@@ -15,7 +15,7 @@ namespace RecursiveAI.OneModelContext.Auth;
 /// shared secret.
 /// </summary>
 /// <remarks>
-/// An issuer that signs only with EdDSA (RFC 8037) needs the <c>RecursiveAI.OneModelContext.OneCrypto</c> package; such a token gets a
+/// For an EdDSA issuer (RFC 8037), supply a custom <see cref="ITokenValidator"/> or the delegate validator. OneCrypto-based support is planned; such a token gets a
 /// failure that says so. Failure descriptions never contain the token.
 /// </remarks>
 public sealed class JwtTokenValidator : ITokenValidator
@@ -120,7 +120,7 @@ public sealed class JwtTokenValidator : ITokenValidator
     return CheckClaims(token.Payload, request);
   }
 
-  private const string EdDsaMessage = "The issuer signs with EdDSA, which needs the RecursiveAI.OneModelContext.OneCrypto package.";
+  private const string EdDsaMessage = "The issuer signs with EdDSA. Use a custom ITokenValidator or DelegateTokenValidator; OneCrypto-based support is planned.";
 
   private static List<JsonWebKey> Candidates(JsonWebKeySet keys, JsonWebToken token)
   {

@@ -12,10 +12,10 @@ var server = new AuthorizationServer(new AuthorizationServerOptions
     SigningKeys = [JsonWebSigningKey.FromECDsa(ecdsa, "2026-11")],
     ScopesSupported = ["files:read", "files:write"],
     Store = new FileAuthorizationStore("/var/lib/app/oauth.json"),
-    AuthorizeUser = async (request, ct) =>
+    AuthorizeUser = (request, ct) => ValueTask.FromResult(
         request.Exchange.User is { } user                       // the host's own sign-in
             ? AuthorizationDecision.Approve(user.Identity!.Name!, request.RequestedScopes)   // after your consent screen
-            : AuthorizationDecision.Redirect(new Uri("https://example.com/login?return=" + Uri.EscapeDataString(request.ResumeUrl.AbsoluteUri))),
+            : AuthorizationDecision.Redirect(new Uri("https://example.com/login?return=" + Uri.EscapeDataString(request.ResumeUrl.AbsoluteUri)))),
 });
 
 // ASP.NET Core:
@@ -101,7 +101,7 @@ to an upstream OpenID Connect provider; the result is still your decision to app
 - **Client ID Metadata Documents:** a `client_id` that is an HTTPS URL is fetched
   (draft-ietf-oauth-client-id-metadata-document). The document must name itself in `client_id`, list valid redirect URIs, use `none` or
   `private_key_jwt`, and may not carry a secret. A pre-registered client of the same name wins. Fetching is guarded (below). Documents
-  are cached per `Cache-Control` (default 5 minutes, at most an hour; `no-store` is honoured), failures for 30 seconds, at most 1000
+  are cached per `Cache-Control` (default 5 minutes, at most an hour; `no-store` is honored), failures for 30 seconds, at most 1000
   entries (at the limit, expired entries go first, then the one that expires soonest, so junk `client_id`s cannot switch caching off;
   a URL that can never be fetched takes no entry), at most 8 fetches in flight and 2 per host (`MaxFetchesPerHost`; more are refused
   at once rather than queued). After a fetch that timed out or could not connect, the host is left alone for 10 seconds
@@ -131,7 +131,7 @@ Access tokens live 10 minutes by default (`AccessTokenLifetime`) and carry `iss`
 `nbf`, `exp`, `jti`, and `sid` (the refresh family) next to the host's extra claims. `typ` is `at+jwt`; `CreateTokenValidator()` requires it
 (RFC 9068 section 4), and `JwtTokenValidator` does when `RequireAccessTokenType` is set.
 
-**Revocation is honoured only by `CreateTokenValidator()`**, which asks the store. A plain `JwtTokenValidator` over the key set (the
+**Revocation is honored only by `CreateTokenValidator()`**, which asks the store. A plain `JwtTokenValidator` over the key set (the
 usual setup for a resource server in another process) accepts a revoked access token until its `exp`, which is why access tokens are
 short. A resource server that validates tokens from an external issuer should set `RequireAccessTokenType` on its `JwtTokenValidator` when
 that issuer emits `typ: at+jwt`, so that another JWT of the same issuer (an ID token) is not accepted as an access token. Keep `AccessTokenLifetime` short, or run the resource server in the same process and use `CreateTokenValidator()`.
@@ -152,7 +152,7 @@ policy; and last the `jti` is recorded, so an assertion is accepted once, and a 
 token is audience-restricted to the resolved resource. No refresh token is issued. The client must authenticate
 (`RequireConfidentialClient` defaults to true). The token's subject is the provider's `sub` prefixed with its issuer and `#`
 (`https://idp.example#alice`), because a subject is only unique within its issuer; `ResolveSubject` maps the provider's user to your
-own subject instead (or refuses). EdDSA-signed assertions need the OneCrypto adapter and are refused until then.
+own subject instead (or refuses). EdDSA-signed assertions are currently refused; OneCrypto-based support is planned. For resource-server tokens from EdDSA issuers, use a custom `ITokenValidator` or `DelegateTokenValidator`.
 
 Client Credentials needs a pre-registered, authenticated client that lists `client_credentials` in its grant types and a scope
 allow-list (`Scopes` on the client or `ScopesSupported`). `client_secret_basic`,
