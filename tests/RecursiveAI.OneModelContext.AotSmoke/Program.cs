@@ -78,7 +78,7 @@ await using (var client = await ContextClient.ConnectAsync(
   cts.Token))
 {
   var tools = await client.ListToolsAsync(cts.Token);
-  var echoed = await client.CallToolAsync("echo", cancellationToken: cts.Token);
+  var echoed = await client.CallToolAsync("echo", new AotToolArguments("hi"), AotArgumentsJson.Default.AotToolArguments, cts.Token);
   var deleted = await client.CallToolAsync("delete", cancellationToken: cts.Token);
   if (client.Era != ProtocolEra.Modern || tools.Count != 2 || echoed.Text != "hi" || deleted.Text != "deleted")
   {
@@ -249,4 +249,11 @@ internal static class HttpLoop
 
   private static bool EndsWithBlankLine(System.Collections.Generic.List<byte> b) =>
     b.Count >= 4 && b[^4] == '\r' && b[^3] == '\n' && b[^2] == '\r' && b[^1] == '\n';
+}
+
+internal sealed record AotToolArguments(string text);
+
+[System.Text.Json.Serialization.JsonSerializable(typeof(AotToolArguments))]
+internal sealed partial class AotArgumentsJson : System.Text.Json.Serialization.JsonSerializerContext
+{
 }

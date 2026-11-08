@@ -8,17 +8,19 @@ OneModelContext is a clean-room .NET 10 library for MCP, the Model Context Proto
 ## A server in ten lines
 
 ```csharp
+using RecursiveAI.OneModelContext;
+
+await ModelContext.ServeAsync(new IndexTools(index));          // stdio
+// await ModelContext.ServeHttpAsync(new IndexTools(index));   // Streamable HTTP on 127.0.0.1:3001
+
 public partial class IndexTools(SearchIndex index)
 {
     /// <summary>Searches the index.</summary>
     /// <param name="query">What to look for.</param>
     /// <param name="limit">Most results to return.</param>
     [Tool(ReadOnly = true)]
-    public Task<SearchHits> Search(string query, int limit = 10) => index.SearchAsync(query, limit);
+    public Task<string[]> Search(string query, int limit = 10) => index.SearchAsync(query, limit);
 }
-
-await ModelContext.ServeAsync(new IndexTools(index));          // stdio
-// await ModelContext.ServeHttpAsync(new IndexTools(index));   // Streamable HTTP on 127.0.0.1:3001
 ```
 
 ```csharp
@@ -27,6 +29,19 @@ var tools = await client.ListToolsAsync();
 var result = await client.CallToolAsync("read_file", new { path = "README.md" });
 Console.WriteLine(result.Text);
 ```
+
+The object-argument call uses reflection and is not trim- or NativeAOT-safe. For AOT, pass source-generated serializer metadata instead:
+
+```csharp
+await using var client = await ModelContext.ConnectAsync("my-server");
+var result = await client.CallToolAsync("read_file", new ReadFileArguments("README.md"), argumentsJsonTypeInfo);
+Console.WriteLine(result.Text);
+```
+
+Here `ReadFileArguments` is your arguments record and `argumentsJsonTypeInfo` is its `JsonTypeInfo<ReadFileArguments>` from a
+source-generated `JsonSerializerContext` (with JSON property names matching the tool schema).
+
+The server example assumes your application supplies `SearchIndex` and `index`; see the complete [indexed search sample](samples/IndexedSearch).
 
 The generator writes each tool's JSON Schema 2020-12 from the signature and its doc comments, and an AOT-safe invoker. More in
 [`samples/`](samples/README.md).
@@ -68,7 +83,7 @@ All packages share one version.
 | `RecursiveAI.OneModelContext.Cli` | The `onemodelcontext` tool | the core package |
 | `RecursiveAI.OneModelContext.Templates` | `dotnet new onemodelcontext-server` and `onemodelcontext-client` | none |
 
-Third-party licences: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+Third-party licenses: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Repository layout
 
@@ -92,7 +107,7 @@ tools/aot-check.sh        # NativeAOT publishes; needs a native toolchain (clang
 
 Build output goes to `artifacts/` (ignored). Set `ArtifactsPath` to put it elsewhere. See [CHANGELOG.md](CHANGELOG.md).
 
-## Licence
+## License
 
 `MIT OR Apache-2.0`, Copyright (c) 2026 Recursive AI, LLC. See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
 

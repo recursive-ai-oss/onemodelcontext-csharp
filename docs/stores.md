@@ -14,6 +14,7 @@ Table names start with `ModelContext` (change it with the `tablePrefix` argument
 
 ## Setting up
 
+<!-- compile-skip: Provider-specific setup and abbreviated authorization-server options; complete store examples are covered by the adapter tests. -->
 ```csharp
 public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
@@ -37,11 +38,11 @@ from the model your context builds; no hand-written SQL is needed.
 - **A code redeems once.** Redeeming is one statement, `UPDATE … SET redeemed = 1 WHERE code_hash = @h AND redeemed = 0`, and the number
   of rows it changed says who won. Of two instances racing on one code, one gets `Redeemed` and the other `AlreadyRedeemed`, which makes
   the authorization server revoke the family exactly as it does with the memory store.
-- **A refresh token rotates once**, the same way, so a rotated token used from another instance is recognised as reuse.
+- **A refresh token rotates once**, the same way, so a rotated token used from another instance is recognized as reuse.
 - **An assertion identifier is accepted once** (`client_assertion` and ID-JAG `jti`): the first insert wins on the primary key; a record
   that has expired is taken over by one conditional update.
 - **Revocations keep the later expiry**; saves of the same client, code or token overwrite.
-- Everything else is the memory store's behaviour, including that an expired code or token is spent when it is presented.
+- Everything else is the memory store's behavior, including that an expired code or token is spent when it is presented.
 
 The authorization server itself keeps no state between requests beyond the store, but both instances need the same signing keys and the
 same `ResumeKey`.
@@ -50,7 +51,7 @@ same `ResumeKey`.
 
 `EfTaskStore<TContext>` is the store to give `TaskServerOptions.Store` when more than one server instance serves the Tasks extension.
 `UpdateAsync` is the compare-and-swap the interface defines: `UPDATE … SET Version = Version + 1 WHERE TaskId = @id AND Version = @version`,
-and the affected-row count says whether the change applied. A task created through one instance can be polled, answered and cancelled
+and the affected-row count says whether the change applied. A task created through one instance can be polled, answered and canceled
 through another; the instance running the work sees the answer and the cancel request when it next reads the row.
 
 The class is marked `[Experimental("OMCX0001")]` because the interface it implements is: using it needs the same opt-in as the Tasks
@@ -89,6 +90,7 @@ the core package and `RecursiveAI.OneLite` and nothing else, and it is trim and 
 | `OneLiteTokenStore` | `ITokenStore` |
 | `OneLiteTaskStore` | `ITaskStore` (Tasks extension, experimental, `OMCX0001`) |
 
+<!-- compile-skip: Provider-specific setup and abbreviated authorization-server options; complete store examples are covered by the adapter tests. -->
 ```csharp
 await using var auth = await OneLiteAuthorizationStore.OpenAsync("state/mcp.db");   // creates the file and the tables
 var server = new AuthorizationServer(new AuthorizationServerOptions { /* … */ Store = auth });
@@ -100,7 +102,7 @@ await using var tasks = await OneLiteTaskStore.OpenAsync("state/mcp.db", capacit
 `OpenAsync(path)` opens its own connection and the store closes it on dispose. `AttachAsync(database)` uses a `Database` you opened, creates
 the tables in it and leaves it open on dispose. Several stores, in one process or several, can use one file.
 
-- **Same behaviour as the other stores.** A code redeems once, a refresh token rotates once, an assertion id is accepted once until it
+- **Same behavior as the other stores.** A code redeems once, a refresh token rotates once, an assertion id is accepted once until it
   expires, revocations keep the later expiry, a spent code is remembered until its family expires, and a task update succeeds only at the
   version the caller read. Redeeming and rotating read and mark in one write transaction; assertions, revocations and task updates are
   single statements. Codes, refresh tokens and client secrets are hashes, and assertion and revocation keys are stored as a SHA-256 hash.

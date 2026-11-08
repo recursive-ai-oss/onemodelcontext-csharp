@@ -14,6 +14,6 @@ base class library only and is trim- and NativeAOT-safe.
 
 Source and documentation: https://github.com/recursive-ai-oss/onemodelcontext-csharp
 
-Licence: `MIT OR Apache-2.0`, Copyright (c) 2026 Recursive AI, LLC.
+License: `MIT OR Apache-2.0`, Copyright (c) 2026 Recursive AI, LLC.
 
 Model Context Protocol® is a registered trademark of LF Projects, LLC. OneModelContext is an independent project and is not affiliated with or endorsed by LF Projects, LLC or the Model Context Protocol project.

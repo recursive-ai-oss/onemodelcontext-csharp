@@ -41,6 +41,10 @@ server.Resources.Add(
   new ResourceDefinition("test://hello", "hello") { MimeType = "text/plain" },
   (uri, _) => ValueTask.FromResult(new ReadResourceResult { Contents = [new TextResourceContents { Uri = uri, Text = "hello" }] }));
 
+server.ResourceTemplates.Add(
+  new ResourceTemplateDefinition("test://{name}", "named"),
+  (uri, _) => ValueTask.FromResult(new ReadResourceResult { Contents = [new TextResourceContents { Uri = uri, Text = "hello" }] }));
+
 server.Prompts.Add(
   new PromptDefinition("greet", "Greets."),
   (_, _) => ValueTask.FromResult(new GetPromptResult { Messages = [new PromptMessage { Role = "user", Content = TextContent.Of("Say hello.") }] }));

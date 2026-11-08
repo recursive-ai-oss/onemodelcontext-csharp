@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
   </ItemGroup>
 
   <ItemGroup>
@@ -24,6 +25,11 @@
     <ProjectReference Include="../../samples/AppsServer/RecursiveAI.OneModelContext.Samples.AppsServer.csproj" />
     <ProjectReference Include="../../samples/ProtectedServer/RecursiveAI.OneModelContext.Samples.ProtectedServer.csproj" />
     <ProjectReference Include="../../samples/HttpServer/RecursiveAI.OneModelContext.Samples.HttpServer.csproj" />
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext.Hosting/RecursiveAI.OneModelContext.Hosting.csproj" />
+    <ProjectReference Include="../../src/RecursiveAI.OneModelContext.Generator/RecursiveAI.OneModelContext.Generator.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="../../README.md;../../PACKAGE.md;../../docs/*.md" Link="Documentation/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

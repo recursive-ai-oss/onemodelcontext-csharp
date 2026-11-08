@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using System.Threading;
 using System.Threading.Tasks;
 using RecursiveAI.OneModelContext.Diagnostics;
@@ -359,6 +361,38 @@ public sealed partial class ContextClient : IAsyncDisposable
   {
     ArgumentNullException.ThrowIfNull(name);
     return CallToolCoreAsync(name, arguments, null, cancellationToken);
+  }
+
+  /// <summary>Calls a tool with arguments serialized using reflection. For trimming or NativeAOT, use the overload accepting serializer metadata.</summary>
+  /// <typeparam name="T">The arguments type.</typeparam>
+  /// <param name="name">The tool name.</param>
+  /// <param name="arguments">The arguments object.</param>
+  /// <param name="cancellationToken">Cancels the call; the server is told.</param>
+  /// <exception cref="ArgumentNullException">The name is null.</exception>
+  /// <exception cref="NotSupportedException">The arguments type cannot be serialized.</exception>
+  /// <exception cref="ProtocolException">The server rejected the call.</exception>
+  [RequiresUnreferencedCode("Serializing tool arguments with reflection requires their members to be preserved. Use the JsonTypeInfo overload instead.")]
+  [RequiresDynamicCode("Serializing tool arguments with reflection may require runtime code generation. Use the JsonTypeInfo overload instead.")]
+  public ValueTask<CallToolResult> CallToolAsync<T>(string name, T arguments, CancellationToken cancellationToken = default)
+  {
+    ArgumentNullException.ThrowIfNull(name);
+    return CallToolCoreAsync(name, JsonSerializer.SerializeToElement(arguments), null, cancellationToken);
+  }
+
+  /// <summary>Calls a tool with arguments serialized using explicit metadata; safe for trimming and NativeAOT.</summary>
+  /// <typeparam name="T">The arguments type.</typeparam>
+  /// <param name="name">The tool name.</param>
+  /// <param name="arguments">The arguments object.</param>
+  /// <param name="typeInfo">Source-generated metadata for the arguments type.</param>
+  /// <param name="cancellationToken">Cancels the call; the server is told.</param>
+  /// <exception cref="ArgumentNullException">The name or metadata is null.</exception>
+  /// <exception cref="NotSupportedException">The metadata cannot serialize the arguments.</exception>
+  /// <exception cref="ProtocolException">The server rejected the call.</exception>
+  public ValueTask<CallToolResult> CallToolAsync<T>(string name, T arguments, JsonTypeInfo<T> typeInfo, CancellationToken cancellationToken = default)
+  {
+    ArgumentNullException.ThrowIfNull(name);
+    ArgumentNullException.ThrowIfNull(typeInfo);
+    return CallToolCoreAsync(name, JsonSerializer.SerializeToElement(arguments, typeInfo), null, cancellationToken);
   }
 
   /// <summary>Calls a tool and reports the progress the server sends while it works.</summary>
