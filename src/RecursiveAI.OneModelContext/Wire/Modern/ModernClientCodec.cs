@@ -58,6 +58,7 @@ internal sealed class ModernClientCodec : IClientCodec
     }
     catch (JsonException)
     {
+      hello.ProbeInconclusive = true;
       Diagnostics.ContextDiagnostics.Publish(Diagnostics.DiagnosticKind.Note, "Modern probe result could not be decoded.", "negotiation");
       // Something answered server/discover with a body that is not a DiscoverResult: not a modern server.
       return null;
@@ -67,6 +68,7 @@ internal sealed class ModernClientCodec : IClientCodec
     var common = FirstCommonModern(hello.SupportedVersions, discover.SupportedVersions);
     if (common is null)
     {
+      hello.ProbeInconclusive = discover.SupportedVersions.Count == 0;
       Diagnostics.ContextDiagnostics.Publish(Diagnostics.DiagnosticKind.Note, "Modern probe advertised no compatible modern revision.", "negotiation");
       // A server that lists only legacy revisions is a legacy server; one that lists a newer modern revision than ours is a version problem.
       return HasModern(discover.SupportedVersions)
@@ -118,7 +120,11 @@ internal sealed class ModernClientCodec : IClientCodec
   {
     if (error.Code != ProtocolErrorCodes.UnsupportedProtocolVersion)
     {
-      // Any other error answers for a legacy server (basic/versioning, stdio backward compatibility): fall back to initialize.
+      // Fallback can keep this connection usable, but only a definitive rejection may teach the era cache.
+      var rejectedHttp = error.Code == Transports.HttpChannel.HttpErrorCode && error.Data.ValueKind == JsonValueKind.Object
+        && error.Data.TryGetProperty("transport", out var transport) && transport.ValueKind == JsonValueKind.True
+        && error.Data.TryGetProperty("httpStatus", out var status) && status.ValueKind == JsonValueKind.Number && status.TryGetInt32(out var code) && code is 400 or 404 or 405;
+      hello.ProbeInconclusive = error.Code != JsonRpcErrorCodes.MethodNotFound && !rejectedHttp;
       return null;
     }
 

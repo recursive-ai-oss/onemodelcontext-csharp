@@ -21,8 +21,6 @@ public sealed class CliTests
 
   private static async Task<(int Code, string Out, string Err)> RunAsync(string stdin, params string[] args)
   {
-    // Real CLI invocations have separate process-local caches; these in-process invocations must not inherit an earlier fallback.
-    EraCache.Shared.Forget(ContextTransport.ProcessFromCommandLine(Server).ServerKey!);
     NegotiationNotes.Enqueue("Command: " + (args.Length == 0 ? "help" : args[0]));
     var output = new StringWriter();
     var error = new StringWriter();
@@ -213,8 +211,6 @@ public sealed class CliTests
 
   private static async Task<(CliApp App, Task<int> Run, StringWriter Out, StringWriter Err, CancellationTokenSource Stop)> StartProxyAsync(params string[] args)
   {
-    // Real CLI invocations have separate process-local caches; these in-process invocations must not inherit an earlier fallback.
-    EraCache.Shared.Forget(ContextTransport.ProcessFromCommandLine(Server).ServerKey!);
     NegotiationNotes.Enqueue("Command: " + (args.Length == 0 ? "help" : args[0]));
     var output = new StringWriter();
     var error = new StringWriter();

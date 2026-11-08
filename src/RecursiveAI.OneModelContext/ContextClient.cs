@@ -89,9 +89,13 @@ public sealed class ContextClientOptions
   /// </summary>
   public TimeSpan ProbeTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
+  /// <summary>Additional time for the first era probe of a newly spawned process, to cover cold startup. Default 10 seconds, making the default first process probe 15 seconds. Zero disables the allowance; negative values throw. The total is still bounded by <see cref="ConnectTimeout"/>.</summary>
+  public TimeSpan ProcessStartupAllowance { get; init; } = TimeSpan.FromSeconds(10);
+
   /// <summary>
   /// Remembers which era each server spoke, keyed by <see cref="ServerKey"/> or the transport's own key, so that reconnecting skips the
-  /// probe. Default <see cref="EraCache.Shared"/>; <c>null</c> turns remembering off. Used only with <see cref="EraPreference.Auto"/>.
+  /// probe. Inconclusive modern probes never record a legacy choice. Default <see cref="EraCache.Shared"/> (legacy entries expire after
+  /// five minutes without renewal on cache hits); <c>null</c> turns remembering off. Used only with <see cref="EraPreference.Auto"/>.
   /// </summary>
   public IEraCache? EraCache { get; init; } = RecursiveAI.OneModelContext.EraCache.Shared;
 
@@ -188,6 +192,7 @@ public sealed partial class ContextClient : IAsyncDisposable
   {
     ArgumentNullException.ThrowIfNull(transport);
     options ??= new ContextClientOptions();
+    ArgumentOutOfRangeException.ThrowIfLessThan(options.ProcessStartupAllowance, TimeSpan.Zero);
     var channel = await transport.OpenAsync(cancellationToken).ConfigureAwait(false);
     var holder = new Holder();
     var rpc = new JsonRpcConnection(channel, new JsonRpcConnectionOptions
@@ -217,7 +222,7 @@ public sealed partial class ContextClient : IAsyncDisposable
     {
       using var timeout = new CancellationTokenSource(options.ConnectTimeout, options.TimeProvider);
       using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
-      var session = await NegotiateAsync(rpc, hello, options, options.ServerKey ?? transport.ServerKey, linked.Token).ConfigureAwait(false);
+      var session = await NegotiateAsync(rpc, hello, options, options.ServerKey ?? transport.ServerKey, transport is ProcessTransport, linked.Token).ConfigureAwait(false);
       foreach (var extension in options.Extensions)
       {
         if (extension.Required && (session.ServerCapabilities.Extensions is not { } offered || !offered.ContainsKey(extension.Id)))
@@ -538,8 +543,8 @@ public sealed partial class ContextClient : IAsyncDisposable
   }
 
   // 2026-07-28 versioning, "Backward Compatibility with Initialization-Based Versions": try the modern probe first, treat a failure that is
-  // not a recognized modern error (or silence) as a legacy server, remember what worked. The era cache only changes the order.
-  private static async ValueTask<ClientSession> NegotiateAsync(JsonRpcConnection rpc, ClientHello hello, ContextClientOptions options, string? serverKey, CancellationToken cancellationToken)
+  // not a recognized modern error (or silence) as a legacy server for this connection. Only definitive rejections teach the cache.
+  private static async ValueTask<ClientSession> NegotiateAsync(JsonRpcConnection rpc, ClientHello hello, ContextClientOptions options, string? serverKey, bool spawnedProcess, CancellationToken cancellationToken)
   {
     var codecs = new List<IClientCodec>();
     foreach (var codec in options.Codecs ?? DefaultCodecs.Client())
@@ -558,8 +563,10 @@ public sealed partial class ContextClient : IAsyncDisposable
     }
 
     var cache = options.Era == EraPreference.Auto && serverKey is not null ? options.EraCache : null;
+    ProtocolEra? rememberedEra = null;
     if (cache is not null && cache.TryGet(serverKey!, out var remembered))
     {
+      rememberedEra = remembered;
       ContextDiagnostics.Publish(DiagnosticKind.Note, "Negotiation remembered " + remembered + ".", "negotiation");
       // The remembered era goes first; the others stay as the fallback in case the server changed.
       var index = codecs.FindIndex(c => c.Era == remembered);
@@ -571,17 +578,34 @@ public sealed partial class ContextClient : IAsyncDisposable
       }
     }
 
+    var rememberFallback = true;
+    var modernAttempted = false;
     for (var i = 0; i < codecs.Count; i++)
     {
       var codec = codecs[i];
       ContextDiagnostics.Publish(DiagnosticKind.Note, "Negotiation trying " + codec.Era + ".", "negotiation");
+      hello.ProbeInconclusive = false;
+      modernAttempted |= codec.Era == ProtocolEra.Modern;
+      var probeTimeout = options.ProbeTimeout;
+      if (i == 0 && spawnedProcess && probeTimeout > TimeSpan.Zero)
+      {
+        probeTimeout += options.ProcessStartupAllowance;
+      }
       var session = i == codecs.Count - 1
         ? await codec.NegotiateAsync(rpc, hello, cancellationToken).ConfigureAwait(false)
-        : await ProbeAsync(codec, rpc, hello, options, cancellationToken).ConfigureAwait(false);
+        : await ProbeAsync(codec, rpc, hello, options, probeTimeout, cancellationToken).ConfigureAwait(false);
+      if (codec.Era == ProtocolEra.Modern && hello.ProbeInconclusive)
+      {
+        rememberFallback = false;
+      }
       if (session is not null)
       {
         ContextDiagnostics.Publish(DiagnosticKind.Note, "Negotiation selected " + session.Era + ".", "negotiation");
-        cache?.Remember(serverKey!, session.Era);
+        // Using a cached legacy choice must not renew its lifetime and postpone the next modern probe forever.
+        if (session.Era == ProtocolEra.Modern || rememberFallback && (modernAttempted || rememberedEra != ProtocolEra.Legacy))
+        {
+          cache?.Remember(serverKey!, session.Era);
+        }
         return session;
       }
     }
@@ -590,14 +614,14 @@ public sealed partial class ContextClient : IAsyncDisposable
     throw new ProtocolVersionException(options.SupportedVersions, hello.ServerVersionsSeen);
   }
 
-  private static async ValueTask<ClientSession?> ProbeAsync(IClientCodec codec, JsonRpcConnection rpc, ClientHello hello, ContextClientOptions options, CancellationToken cancellationToken)
+  private static async ValueTask<ClientSession?> ProbeAsync(IClientCodec codec, JsonRpcConnection rpc, ClientHello hello, ContextClientOptions options, TimeSpan probeTimeout, CancellationToken cancellationToken)
   {
-    if (options.ProbeTimeout <= TimeSpan.Zero || options.ProbeTimeout == Timeout.InfiniteTimeSpan)
+    if (probeTimeout <= TimeSpan.Zero || probeTimeout == Timeout.InfiniteTimeSpan)
     {
       return await codec.NegotiateAsync(rpc, hello, cancellationToken).ConfigureAwait(false);
     }
 
-    using var probe = new CancellationTokenSource(options.ProbeTimeout, options.TimeProvider);
+    using var probe = new CancellationTokenSource(probeTimeout, options.TimeProvider);
     using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, probe.Token);
     try
     {
@@ -606,7 +630,14 @@ public sealed partial class ContextClient : IAsyncDisposable
     catch (OperationCanceledException) when (probe.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
     {
       ContextDiagnostics.Publish(DiagnosticKind.Note, "Negotiation probe timed out for " + codec.Era + ".", "negotiation");
-      // Silence: the server does not speak this era.
+      hello.ProbeInconclusive = true;
+      return null;
+    }
+    catch (Exception ex) when (!cancellationToken.IsCancellationRequested && !rpc.IsClosed && ex is System.IO.IOException or TransportException or TimeoutException)
+    {
+      // A recoverable transport failure permits a fallback attempt, but is not evidence of protocol support.
+      hello.ProbeInconclusive = true;
+      ContextDiagnostics.Publish(DiagnosticKind.Note, "Negotiation probe transport failure for " + codec.Era + ".", "negotiation");
       return null;
     }
   }
