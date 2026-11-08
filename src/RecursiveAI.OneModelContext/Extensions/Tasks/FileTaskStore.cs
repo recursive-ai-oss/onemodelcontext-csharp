@@ -37,7 +37,7 @@ public sealed class FileTaskStore : ITaskStore, IDisposable
   /// <summary>Creates a store.</summary>
   /// <param name="directory">The directory; created when missing.</param>
   /// <param name="capacity">Most tasks held at once; <see cref="CreateAsync"/> refuses more. Default 10,000.</param>
-  /// <param name="replacementRetries">Retries on Windows read contention/transient replacement misses and replacement sharing/access failures, 10 ms apart; default 200 (at most 2 seconds of delay). Zero disables retries. The final error is thrown.</param>
+  /// <param name="replacementRetries">Retries on Windows read contention/transient replacement misses and replacement sharing/access failures, 10 ms apart; default 200 (at most 2 seconds of delay). Zero disables retries. Closed temporary files count as recent for half this delay budget (minimum 10 ms); local in-flight writes remain evidence, but reads still respect the budget. The final error is thrown.</param>
   /// <param name="timeProvider">Clock for replacement retries; null uses <see cref="TimeProvider.System"/>.</param>
   public FileTaskStore(string directory, int capacity = 10_000, int replacementRetries = 200, TimeProvider? timeProvider = null)
   {
@@ -190,6 +190,7 @@ public sealed class FileTaskStore : ITaskStore, IDisposable
   // The temporary file is created with its final permissions, then renamed: readers see the old task or the new one.
   private async ValueTask WriteAsync(string path, TaskRecord task, CancellationToken cancellationToken)
   {
+    using var writing = Storage.AtomicFile.BeginWrite(path);
     var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
     var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, Options = FileOptions.Asynchronous };
     if (!OperatingSystem.IsWindows())

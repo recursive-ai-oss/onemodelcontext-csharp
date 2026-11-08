@@ -244,7 +244,7 @@ public sealed class FileAuthorizationStore : MemoryAuthorizationStore
 
   /// <summary>Opens or creates the store.</summary>
   /// <param name="path">The file. Its directory is created if missing.</param>
-  /// <param name="replacementRetries">Retries on Windows read contention/transient replacement misses and replacement sharing/access failures, 10 ms apart; default 200 (at most 2 seconds of delay). Zero disables retries.</param>
+  /// <param name="replacementRetries">Retries on Windows read contention/transient replacement misses and replacement sharing/access failures, 10 ms apart; default 200 (at most 2 seconds of delay). Zero disables retries. Closed temporary files count as recent for half this delay budget (minimum 10 ms); local in-flight writes remain evidence, but reads still respect the budget.</param>
   /// <param name="timeProvider">Clock for retries; null uses <see cref="TimeProvider.System"/>.</param>
   /// <param name="cancellationToken">Cancels opening the initial snapshot and its retry delays.</param>
   /// <exception cref="InvalidDataException">The file exists but is not a store written by this class. It is never overwritten in that case.</exception>
@@ -291,6 +291,7 @@ public sealed class FileAuthorizationStore : MemoryAuthorizationStore
 
   private protected override void Persist(StoreState state)
   {
+    using var writing = Storage.AtomicFile.BeginWrite(_path);
     var temp = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
     var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
     if (!OperatingSystem.IsWindows())

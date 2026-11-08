@@ -209,7 +209,7 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
   /// <param name="path">The file. Its directory is created when missing. Choose a location only the user can read.</param>
   /// <param name="protector">Seals the file contents; null stores them as JSON protected by file permissions alone.</param>
   /// <param name="timeProvider">The clock for abandoned temporary files and replacement retries; null for the system clock.</param>
-  /// <param name="replacementRetries">Retries on Windows read contention/transient replacement misses and replacement sharing/access failures, 10 ms apart; default 200 (at most 2 seconds of delay). Zero disables retries. The final error is thrown.</param>
+  /// <param name="replacementRetries">Retries on Windows read contention/transient replacement misses and replacement sharing/access failures, 10 ms apart; default 200 (at most 2 seconds of delay). Zero disables retries. Closed temporary files count as recent for half this delay budget (minimum 10 ms); local in-flight writes remain evidence, but reads still respect the budget. The final error is thrown.</param>
   public FileTokenStore(string path, ITokenProtector? protector = null, TimeProvider? timeProvider = null, int replacementRetries = 200)
   {
     ArgumentException.ThrowIfNullOrEmpty(path);
@@ -355,6 +355,7 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
 
   private async Task SaveAsync(Dictionary<string, TokenRecord> all, CancellationToken cancellationToken)
   {
+    using var writing = Storage.AtomicFile.BeginWrite(_path);
     using var buffer = new MemoryStream();
     using (var writer = new Utf8JsonWriter(buffer))
     {

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -8,6 +9,43 @@ namespace RecursiveAI.OneModelContext.Storage;
 // Shared by file-backed stores; no protocol state belongs here.
 internal static class AtomicFile
 {
+  private static readonly object WriteGate = new();
+  private static readonly Dictionary<string, int> ActiveWrites = new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
+  // Entries exist only while writes are in flight, never for every path the process has seen.
+  internal static IDisposable BeginWrite(string path)
+  {
+    lock (WriteGate)
+    {
+      ActiveWrites[path] = ActiveWrites.GetValueOrDefault(path) + 1;
+    }
+    return new WriteLease(path);
+  }
+
+  private sealed class WriteLease(string path) : IDisposable
+  {
+    private bool _disposed;
+    public void Dispose()
+    {
+      lock (WriteGate)
+      {
+        if (_disposed)
+        {
+          return;
+        }
+        _disposed = true;
+        if (ActiveWrites[path] == 1)
+        {
+          ActiveWrites.Remove(path);
+        }
+        else
+        {
+          ActiveWrites[path]--;
+        }
+      }
+    }
+  }
+
   internal static ValueTask CommitAsync(string temporary, string path, int retries, TimeProvider time, CancellationToken cancellationToken) =>
     RetryAsync(() =>
     {
@@ -25,7 +63,7 @@ internal static class AtomicFile
   {
     var windows = OperatingSystem.IsWindows();
     return OpenReadCoreAsync(() => new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, bufferSize, asynchronous),
-      () => File.Exists(path) || HasPendingReplacement(path), windows && File.Exists(path), retries, time, windows, cancellationToken);
+      () => File.Exists(path) || HasPendingReplacement(path, retries, time), windows && File.Exists(path), retries, time, windows, cancellationToken);
   }
 
   // Windows can temporarily remove the destination name or deny new opens during replacement, even with deletion-sharing readers.
@@ -67,12 +105,30 @@ internal static class AtomicFile
     }
   }
 
-  private static bool HasPendingReplacement(string path)
+  internal static bool HasPendingReplacement(string path, int retries, TimeProvider time)
   {
+    lock (WriteGate)
+    {
+      if (ActiveWrites.ContainsKey(path))
+      {
+        return true;
+      }
+    }
+    // A closed temp is evidence only briefly, not proof of a live writer. Half the delay budget (default 1 s) lets unchanged
+    // crash leftovers stop blocking within a read's budget. A local in-flight write is tracked independently of timestamps.
+    var recent = TimeSpan.FromMilliseconds(Math.Max(10, retries * 5d));
+    var now = time.GetUtcNow();
     try
     {
-      using var files = Directory.EnumerateFiles(Path.GetDirectoryName(path)!, Path.GetFileName(path) + ".*.tmp").GetEnumerator();
-      return files.MoveNext();
+      foreach (var temporary in Directory.EnumerateFiles(Path.GetDirectoryName(path)!, Path.GetFileName(path) + ".*.tmp"))
+      {
+        var modified = new DateTimeOffset(File.GetLastWriteTimeUtc(temporary), TimeSpan.Zero);
+        if ((now - modified).Duration() <= recent)
+        {
+          return true;
+        }
+      }
+      return false;
     }
     catch (DirectoryNotFoundException)
     {

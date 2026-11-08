@@ -156,4 +156,74 @@ public class AtomicFileTests
     Assert.Equal(1, calls);
   }
 
+  [Fact]
+  public async Task A_stale_temporary_file_is_not_evidence_of_a_replacement()
+  {
+    var clock = new ManualTimeProvider();
+    var directory = Path.Combine(Path.GetTempPath(), "atomic-stale-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(directory);
+    try
+    {
+      var path = Path.Combine(directory, "state.json");
+      var temporary = path + ".abandoned.tmp";
+      await File.WriteAllTextAsync(temporary, "synthetic", TestContext.Current.CancellationToken);
+      File.SetLastWriteTimeUtc(temporary, clock.GetUtcNow().AddHours(-2).UtcDateTime);
+      Assert.False(AtomicFile.HasPendingReplacement(path, 200, clock));
+      var opening = AtomicFile.OpenReadCoreAsync<object>(() => throw new FileNotFoundException(),
+        () => AtomicFile.HasPendingReplacement(path, 200, clock), observedFile: false, 200, clock, windows: true, TestContext.Current.CancellationToken).AsTask();
+      // Only the ordinary missing-file confirmation, not the replacement budget, is needed.
+      clock.Advance(TimeSpan.FromMilliseconds(10));
+      Assert.Null(await opening.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+    }
+    finally
+    {
+      Directory.Delete(directory, recursive: true);
+    }
+  }
+
+  [Fact]
+  public async Task A_fresh_temporary_file_causes_retry_but_unchanged_evidence_expires()
+  {
+    var clock = new ManualTimeProvider();
+    var directory = Path.Combine(Path.GetTempPath(), "atomic-fresh-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(directory);
+    try
+    {
+      var path = Path.Combine(directory, "state.json");
+      var temporary = path + ".fresh.tmp";
+      await File.WriteAllTextAsync(temporary, "synthetic", TestContext.Current.CancellationToken);
+      File.SetLastWriteTimeUtc(temporary, clock.GetUtcNow().UtcDateTime);
+      Assert.True(AtomicFile.HasPendingReplacement(path, 200, clock));
+      var value = new object();
+      var attempts = 0;
+      var opening = AtomicFile.OpenReadCoreAsync(() => ++attempts == 1 ? throw new FileNotFoundException() : value,
+        () => AtomicFile.HasPendingReplacement(path, 200, clock), observedFile: false, 200, clock, windows: true, TestContext.Current.CancellationToken).AsTask();
+      Assert.False(opening.IsCompleted);
+      clock.Advance(TimeSpan.FromMilliseconds(10));
+      Assert.Same(value, await opening.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+      clock.Advance(TimeSpan.FromSeconds(1));
+      Assert.False(AtomicFile.HasPendingReplacement(path, 200, clock));
+    }
+    finally
+    {
+      Directory.Delete(directory, recursive: true);
+    }
+  }
+
+  [Fact]
+  public void In_flight_writes_are_counted_and_removed_after_the_last_lease()
+  {
+    var clock = new ManualTimeProvider();
+    var path = Path.Combine(Path.GetTempPath(), "atomic-inflight-" + Guid.NewGuid().ToString("N"), "state.json");
+    using var first = AtomicFile.BeginWrite(path);
+    using var second = AtomicFile.BeginWrite(path);
+    clock.Advance(TimeSpan.FromHours(1));
+    Assert.True(AtomicFile.HasPendingReplacement(path, 200, clock));
+    first.Dispose();
+    first.Dispose();
+    Assert.True(AtomicFile.HasPendingReplacement(path, 200, clock));
+    second.Dispose();
+    Assert.False(AtomicFile.HasPendingReplacement(path, 200, clock));
+  }
+
 }
