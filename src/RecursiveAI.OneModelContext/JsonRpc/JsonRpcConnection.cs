@@ -29,6 +29,9 @@ public enum JsonRpcCloseReason
 /// <summary>Callbacks and limits of a <see cref="JsonRpcConnection"/>.</summary>
 public sealed class JsonRpcConnectionOptions
 {
+  // A protocol handshake is a barrier: later admissions must observe its completed state transition.
+  internal Predicate<JsonRpcRequest>? RequestBarrier { get; init; }
+
   /// <summary>
   /// Answers an incoming request: return the response message (result or error) or <c>null</c> to send none.
   /// Called concurrently, one call per request. When absent every request gets -32601.
@@ -110,6 +113,10 @@ public sealed class JsonRpcConnection : IAsyncDisposable
     _channel = channel;
     _channelWritesConcurrently = channel is IConcurrentWriteChannel;
     _options = options ?? new JsonRpcConnectionOptions();
+    if (channel is NewlineChannel newline)
+    {
+      newline.ConfigureShutdown(_options.ShutdownTimeout, _options.EndOfStreamTimeout + _options.ShutdownTimeout, _options.TimeProvider);
+    }
   }
 
   /// <summary>
@@ -146,9 +153,19 @@ public sealed class JsonRpcConnection : IAsyncDisposable
       using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _closed.Token);
       while (true)
       {
+        if (_channel is NewlineChannel newline)
+        {
+          await newline.WaitForWriteCapacityAsync(linked.Token).ConfigureAwait(false);
+        }
+
         var read = await _channel.ReadAsync(linked.Token).ConfigureAwait(false);
         if (read.Status == JsonRpcChannelStatus.EndOfStream)
         {
+          if (_channel is NewlineChannel ending)
+          {
+            ending.BeginShutdown();
+          }
+
           break;
         }
 
@@ -377,7 +394,7 @@ public sealed class JsonRpcConnection : IAsyncDisposable
     switch (message)
     {
       case JsonRpcRequest request:
-        Track(HandleAndRespondAsync(request));
+        await HandleAndRespondAsync(request, cancellationToken).ConfigureAwait(false);
         break;
       case JsonRpcNotification notification:
         await DeliverNotificationAsync(notification, cancellationToken).ConfigureAwait(false);
@@ -432,15 +449,22 @@ public sealed class JsonRpcConnection : IAsyncDisposable
 
   // The request is admitted and registered on the read loop, so a cancellation that arrives next finds it; the handler itself runs on the
   // thread pool, so the read loop goes straight on to the next message instead of waiting for the handler and the reply to be written.
-  private Task HandleAndRespondAsync(JsonRpcRequest request)
+  private async ValueTask HandleAndRespondAsync(JsonRpcRequest request, CancellationToken cancellationToken)
   {
     var (entry, rejection) = Admit(request);
     if (entry is null)
     {
-      return TrySendAsync(rejection!).AsTask();
+      // Rejections also consume output capacity. Await them so a peer that never reads cannot accumulate unbounded tasks.
+      await TrySendAsync(rejection!).ConfigureAwait(false);
+      return;
     }
 
-    return Task.Run(() => RunAndRespondAsync(request, entry));
+    var work = Task.Run(() => RunAndRespondAsync(request, entry), CancellationToken.None);
+    Track(work);
+    if (_options.RequestBarrier?.Invoke(request) == true)
+    {
+      await work.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
   }
 
   private async Task RunAndRespondAsync(JsonRpcRequest request, IncomingRequest entry)
@@ -647,6 +671,11 @@ public sealed class JsonRpcConnection : IAsyncDisposable
     if (Interlocked.Exchange(ref _closing, 1) != 0)
     {
       return;
+    }
+
+    if (_channel is NewlineChannel ending)
+    {
+      ending.BeginShutdown();
     }
 
     foreach (var pair in _pending)

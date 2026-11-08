@@ -58,7 +58,9 @@ internal interface IConcurrentWriteChannel
 /// the line bound plus one read chunk. Buffers come from <see cref="ArrayPool{T}"/> and are cleared when returned.
 /// Writes are queued and sent by one background drain, so a caller that is also the reader does not wait for the stream, and messages that
 /// pile up while a write is in flight go out together in the next one. Order is kept. At most <see cref="MaxQueuedBytes"/> wait in the
-/// queue: a writer past that waits until the stream has taken some (backpressure). A stream failure is reported by the next write.
+/// queue: a writer past that waits before copying (backpressure). A stream failure is reported by the next write.
+/// Standalone disposal uses TimeProvider.System, with a five-second no-progress limit and a ten-second total bound. A connection supplies
+/// its clock and shutdown bounds instead. Progress is observed after each 16 KiB write. A stalled or failed stream is closed, never reused.
 /// </remarks>
 public sealed class NewlineChannel : IJsonRpcChannel
 {
@@ -88,6 +90,37 @@ public sealed class NewlineChannel : IJsonRpcChannel
   private Task _drain = Task.CompletedTask;
   private TaskCompletionSource? _space;
   private Exception? _writeFault;
+  private Task? _disposeTask;
+  private TimeProvider _time = TimeProvider.System;
+  private TimeSpan _idleTimeout = TimeSpan.FromSeconds(5);
+  private TimeSpan _drainTimeout = TimeSpan.FromSeconds(10);
+  private long _lastProgress;
+  private long? _shutdownStarted;
+
+  internal void BeginShutdown() => _shutdownStarted ??= _time.GetTimestamp();
+
+  // The connection owns shutdown policy; standalone channels use the same five-second idle / ten-second total defaults.
+  internal void ConfigureShutdown(TimeSpan idleTimeout, TimeSpan drainTimeout, TimeProvider time)
+  {
+    _idleTimeout = idleTimeout;
+    _drainTimeout = drainTimeout;
+    _time = time;
+  }
+
+  internal ValueTask WaitForWriteCapacityAsync(CancellationToken cancellationToken)
+  {
+    lock (_gate)
+    {
+      ObjectDisposedException.ThrowIf(_disposed, this);
+      if (_writeFault is { } fault)
+      {
+        throw new IOException("The output stream failed.", fault);
+      }
+
+      return _space is null && _queued < MaxQueuedBytes ? ValueTask.CompletedTask :
+        new ValueTask((_space ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task.WaitAsync(cancellationToken));
+    }
+  }
 
   /// <summary>Creates a channel over a duplex stream.</summary>
   /// <param name="duplex">A stream that can read and write.</param>
@@ -193,42 +226,59 @@ public sealed class NewlineChannel : IJsonRpcChannel
 
   /// <inheritdoc />
   /// <exception cref="IOException">An earlier write to the stream failed.</exception>
-  public ValueTask WriteAsync(ReadOnlyMemory<byte> message, CancellationToken cancellationToken)
+  public async ValueTask WriteAsync(ReadOnlyMemory<byte> message, CancellationToken cancellationToken)
   {
-    ObjectDisposedException.ThrowIf(_disposed, this);
-    Task? space = null;
-    lock (_gate)
+    while (true)
     {
-      if (_writeFault is { } fault)
+      Task space;
+      var accepted = false;
+      lock (_gate)
       {
-        throw new IOException("An earlier write failed: " + fault.Message, fault);
-      }
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_writeFault is { } fault)
+        {
+          throw new IOException("The output stream failed.", fault);
+        }
 
-      var needed = _queued + message.Length + 1;
-      if (needed > _queue.Length)
-      {
-        var bigger = ArrayPool<byte>.Shared.Rent(Math.Max(needed, Math.Min(_queue.Length * 2, MaxQueuedBytes)));
-        _queue.AsSpan(0, _queued).CopyTo(bigger);
-        ArrayPool<byte>.Shared.Return(_queue, clearArray: true);
-        _queue = bigger;
-      }
+        // Reserve capacity before copying. A single oversized message may occupy an otherwise empty queue, never join another one.
+        var needed = (long)_queued + message.Length + 1;
+        if (_queued == 0 || needed <= MaxQueuedBytes)
+        {
+          if (needed > _queue.Length)
+          {
+            var bigger = ArrayPool<byte>.Shared.Rent((int)needed);
+            _queue.AsSpan(0, _queued).CopyTo(bigger);
+            ArrayPool<byte>.Shared.Return(_queue, clearArray: true);
+            _queue = bigger;
+          }
 
-      message.Span.CopyTo(_queue.AsSpan(_queued));
-      _queue[_queued + message.Length] = (byte)'\n';
-      _queued += message.Length + 1;
-      if (!_draining)
-      {
-        _draining = true;
-        _drain = Task.Run(DrainAsync, CancellationToken.None);
-      }
+          message.Span.CopyTo(_queue.AsSpan(_queued));
+          _queue[_queued + message.Length] = (byte)'\n';
+          _queued += message.Length + 1;
+          if (!_draining)
+          {
+            _draining = true;
+            _drain = Task.Run(DrainAsync, CancellationToken.None);
+          }
 
-      if (_queued > MaxQueuedBytes)
-      {
+          if (_queued <= MaxQueuedBytes)
+          {
+            return;
+          }
+
+          accepted = true;
+        }
+
         space = (_space ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
       }
-    }
 
-    return space is null ? ValueTask.CompletedTask : new ValueTask(space.WaitAsync(cancellationToken));
+      await space.WaitAsync(cancellationToken).ConfigureAwait(false);
+      if (accepted)
+      {
+        return;
+      }
+    }
   }
 
   // The single writer to the stream: takes everything queued, writes it as one block, repeats until nothing is left.
@@ -265,7 +315,13 @@ public sealed class NewlineChannel : IJsonRpcChannel
 
       try
       {
-        await _output.WriteAsync(block.AsMemory(0, length), _stopWriting.Token).ConfigureAwait(false);
+        // Stream.WriteAsync accepts the whole supplied buffer or throws. Small chunks let shutdown observe actual progress even
+        // when a large response is flowing slowly, instead of cancelling a single multi-megabyte write after a fixed delay.
+        for (var offset = 0; offset < length; offset += 16 * 1024)
+        {
+          await _output.WriteAsync(block.AsMemory(offset, Math.Min(16 * 1024, length - offset)), _stopWriting.Token).ConfigureAwait(false);
+          Interlocked.Exchange(ref _lastProgress, _time.GetTimestamp());
+        }
         await _output.FlushAsync(_stopWriting.Token).ConfigureAwait(false);
       }
       catch (Exception ex) when (ex is IOException or ObjectDisposedException or NotSupportedException or OperationCanceledException)
@@ -288,24 +344,44 @@ public sealed class NewlineChannel : IJsonRpcChannel
   }
 
   /// <inheritdoc />
-  public async ValueTask DisposeAsync()
+  public ValueTask DisposeAsync()
   {
-    if (_disposed)
+    lock (_gate)
     {
-      return;
+      if (_disposeTask is not null)
+      {
+        return new ValueTask(_disposeTask);
+      }
+
+      _disposed = true;
+      _space?.TrySetException(new ObjectDisposedException(nameof(NewlineChannel)));
+      _space = null;
+      Interlocked.Exchange(ref _lastProgress, _time.GetTimestamp());
+      _disposeTask = Task.Run(DisposeCoreAsync, CancellationToken.None);
+      return new ValueTask(_disposeTask);
+    }
+  }
+
+  private async Task DisposeCoreAsync()
+  {
+    var started = _shutdownStarted ?? _time.GetTimestamp();
+    while (!_drain.IsCompleted)
+    {
+      var idleRemaining = _idleTimeout - _time.GetElapsedTime(Interlocked.Read(ref _lastProgress));
+      var totalRemaining = _drainTimeout - _time.GetElapsedTime(started);
+      if (idleRemaining <= TimeSpan.Zero || totalRemaining <= TimeSpan.Zero)
+      {
+        await _stopWriting.CancelAsync().ConfigureAwait(false);
+        break;
+      }
+
+      var delay = idleRemaining < totalRemaining ? idleRemaining : totalRemaining;
+      using var wake = new CancellationTokenSource();
+      await Task.WhenAny(_drain, Task.Delay(delay, _time, wake.Token)).ConfigureAwait(false);
+      await wake.CancelAsync().ConfigureAwait(false);
     }
 
-    _disposed = true;
-    try
-    {
-      // Queued output still goes out, unless the stream is stuck on a peer that stopped reading.
-      await _drain.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
-    }
-    catch (TimeoutException)
-    {
-      await _stopWriting.CancelAsync().ConfigureAwait(false);
-    }
-
+    // The drain owns its in-flight block until WriteAsync returns, even if a stream ignores cancellation. Never return that block here.
     lock (_gate)
     {
       ArrayPool<byte>.Shared.Return(_queue, clearArray: true);

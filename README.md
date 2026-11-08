@@ -36,7 +36,7 @@ The generator writes each tool's JSON Schema 2020-12 from the signature and its 
 - **Both protocol eras, one API.** The stateless 2026-07-28 revision first, and one legacy codec for 2024-11-05 through 2025-11-25. A
   client negotiates the era per server; a server answers both on one stdio stream or endpoint. Your code is written against the modern
   semantics and the era is a codec detail.
-- **Transports.** stdio and any duplex `Stream`; Streamable HTTP as a client, as a host-agnostic server core, on a small built-in HTTP/1.1
+- **Transports.** [stdio and any duplex `Stream`](docs/stdio.md); Streamable HTTP as a client, as a host-agnostic server core, on a small built-in HTTP/1.1
   listener (loopback by default) and on ASP.NET Core with `MapModelContext`; the deprecated HTTP+SSE transport as a client fallback.
 - **Tools, resources and prompts**, declared with attributes or registered while the server runs, with `RequestContext` for cancellation,
   progress, user confirmation and elicitation. A handler that asks for input behaves the same on both eras ([multi-round-trip](docs/multi-round-trip.md)).

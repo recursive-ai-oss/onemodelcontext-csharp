@@ -27,12 +27,20 @@ internal sealed class ServerFeatures(ContextServer server)
       _ => null,
     };
 
-    return member is not null
-      && parameters.ValueKind == JsonValueKind.Object
-      && parameters.TryGetProperty(member, out var value)
-      && value.ValueKind == JsonValueKind.String
-      ? value.GetString()
-      : null;
+    try
+    {
+      return member is not null
+        && parameters.ValueKind == JsonValueKind.Object
+        && parameters.TryGetProperty(member, out var value)
+        && value.ValueKind == JsonValueKind.String
+        ? value.GetString()
+        : null;
+    }
+    catch (InvalidOperationException)
+    {
+      // Invalid string encoding is invalid params, not a handler fault; the parameter reader supplies that verdict.
+      return null;
+    }
   }
 
   internal async ValueTask<Result> HandleAsync(string method, JsonElement parameters, RequestContext context)
@@ -195,7 +203,14 @@ internal sealed class ServerFeatures(ContextServer server)
         if (property.NameEquals("name") && property.Value.ValueKind == JsonValueKind.String)
         {
           bit = 1;
-          name = property.Value.GetString();
+          try
+          {
+            name = property.Value.GetString();
+          }
+          catch (InvalidOperationException)
+          {
+            throw new ProtocolException(JsonRpcErrorCodes.InvalidParams, "Invalid params: tool name is not a valid string.");
+          }
         }
         else if (property.NameEquals("arguments"))
         {

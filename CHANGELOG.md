@@ -6,6 +6,10 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
 
 ### Fixed
 
+- Stdio output shutdown follows write progress within the EOF linger bound; queued writes apply backpressure to input and are safe
+  against concurrent disposal. Pipelined legacy requests wait for initialization. Invalid tool-name encoding is invalid params, and
+  HTTP response-body I/O failures are no longer mistaken for size limits. The protected-server sample requires its token in the environment.
+
 - Stdio and stream servers finish admitted requests after input EOF before closing their output. `EndOfStreamTimeout` gives handlers a
   5-second grace period before cancellation; shutdown still has a bounded wait for handlers that ignore cancellation.
 

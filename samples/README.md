@@ -44,12 +44,14 @@ Run `tools/aot-check.sh` to publish core, `IndexedSearch`, `HttpServer` and the 
 
 `onemodelcontext inspect "dotnet run --project samples/StdioServer" --era legacy` shows the older handshake against any sample; `tests/RecursiveAI.OneModelContext.CliTests` also runs `inspect` and `call` against a server that only speaks 2025-03-26, 2025-06-18 and the full older set.
 
+`ProtectedServer` requires `PROTECTED_SAMPLE_TOKEN` in its environment and exits without serving if it is absent. The sample never prints the token.
+
 ## Tests
 
 ```sh
 dotnet run --project tests/RecursiveAI.OneModelContext.SamplesTests
 ```
 
-Model Context Protocol® is a registered trademark of LF Projects, LLC. OneModelContext is an independent project and is not affiliated with or endorsed by LF Projects, LLC or the Model Context Protocol project.
-
 © Recursive AI, LLC. Licensed under MIT OR Apache-2.0.
+
+Model Context Protocol® is a registered trademark of LF Projects, LLC. OneModelContext is an independent project and is not affiliated with or endorsed by LF Projects, LLC or the Model Context Protocol project.

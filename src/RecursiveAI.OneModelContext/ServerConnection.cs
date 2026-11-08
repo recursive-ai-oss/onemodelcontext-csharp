@@ -23,6 +23,7 @@ internal sealed class ServerConnection : IServerSink, IAsyncDisposable
     _rpc = new JsonRpcConnection(channel, new JsonRpcConnectionOptions
     {
       RequestHandler = HandleRequestAsync,
+      RequestBarrier = static request => request.Method == Methods.Initialize,
       NotificationHandler = HandleNotificationAsync,
       HandlerFaulted = ex => ContextDiagnostics.Publish(DiagnosticKind.HandlerFault, "A request handler threw " + ex.GetType().Name + ".", null, ex),
       MaxConcurrentRequests = server.Options.MaxConcurrentRequests,
