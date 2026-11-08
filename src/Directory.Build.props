@@ -24,6 +24,8 @@
     <PackageReadmeFile>PACKAGE.md</PackageReadmeFile>
     <PackageTags>mcp;model-context-protocol;sdk;json-rpc;client;server;stdio;aot</PackageTags>
     <EnablePackageValidation>true</EnablePackageValidation>
+    <!-- Compare every pack against the last published release, so an unintended breaking change fails the build. -->
+    <PackageValidationBaselineVersion>1.0.0</PackageValidationBaselineVersion>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(IsPackable)' == 'true'">
