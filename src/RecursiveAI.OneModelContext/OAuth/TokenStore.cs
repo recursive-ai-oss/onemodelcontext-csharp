@@ -209,7 +209,7 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
   /// <param name="path">The file. Its directory is created when missing. Choose a location only the user can read.</param>
   /// <param name="protector">Seals the file contents; null stores them as JSON protected by file permissions alone.</param>
   /// <param name="timeProvider">The clock for abandoned temporary files and replacement retries; null for the system clock.</param>
-  /// <param name="replacementRetries">Retries on replacement sharing/access failures, 10 ms apart; default 200 (at most 2 seconds of delay). Zero disables retries. The final error is thrown.</param>
+  /// <param name="replacementRetries">Retries on Windows read contention/transient replacement misses and replacement sharing/access failures, 10 ms apart; default 200 (at most 2 seconds of delay). Zero disables retries. The final error is thrown.</param>
   public FileTokenStore(string path, ITokenProtector? protector = null, TimeProvider? timeProvider = null, int replacementRetries = 200)
   {
     ArgumentException.ThrowIfNullOrEmpty(path);
@@ -290,7 +290,7 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
   private async Task<(Dictionary<string, TokenRecord> Entries, string? Problem)> LoadAsync(CancellationToken cancellationToken)
   {
     var result = new Dictionary<string, TokenRecord>(StringComparer.Ordinal);
-    if (!File.Exists(_path))
+    if (!OperatingSystem.IsWindows() && !File.Exists(_path))
     {
       return (result, null);
     }
@@ -302,8 +302,12 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
     }
 
     byte[] bytes;
-    await using (var stream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1, useAsync: true))
+    await using (var stream = await Storage.AtomicFile.OpenReadAsync(_path, _replacementRetries, _time, cancellationToken, bufferSize: 1).ConfigureAwait(false))
     {
+      if (stream is null)
+      {
+        return (result, null);
+      }
       if (stream.Length > MaxFileBytes)
       {
         return (result, "the file is larger than a token store should be.");

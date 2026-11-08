@@ -37,7 +37,7 @@ public sealed class FileTaskStore : ITaskStore, IDisposable
   /// <summary>Creates a store.</summary>
   /// <param name="directory">The directory; created when missing.</param>
   /// <param name="capacity">Most tasks held at once; <see cref="CreateAsync"/> refuses more. Default 10,000.</param>
-  /// <param name="replacementRetries">Retries on replacement sharing/access failures, 10 ms apart; default 200 (at most 2 seconds of delay). Zero disables retries. The final error is thrown.</param>
+  /// <param name="replacementRetries">Retries on Windows read contention/transient replacement misses and replacement sharing/access failures, 10 ms apart; default 200 (at most 2 seconds of delay). Zero disables retries. The final error is thrown.</param>
   /// <param name="timeProvider">Clock for replacement retries; null uses <see cref="TimeProvider.System"/>.</param>
   public FileTaskStore(string directory, int capacity = 10_000, int replacementRetries = 200, TimeProvider? timeProvider = null)
   {
@@ -173,20 +173,12 @@ public sealed class FileTaskStore : ITaskStore, IDisposable
     return Path.Combine(_directory, taskId + Extension);
   }
 
-  private static async ValueTask<TaskRecord?> ReadAsync(string path, CancellationToken cancellationToken)
+  private async ValueTask<TaskRecord?> ReadAsync(string path, CancellationToken cancellationToken)
   {
     try
     {
-      await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.Asynchronous);
-      return await JsonSerializer.DeserializeAsync(stream, TaskStoreJsonContext.Default.TaskRecord, cancellationToken).ConfigureAwait(false);
-    }
-    catch (FileNotFoundException)
-    {
-      return null;
-    }
-    catch (DirectoryNotFoundException)
-    {
-      return null;
+      await using var stream = await Storage.AtomicFile.OpenReadAsync(path, _replacementRetries, _time, cancellationToken).ConfigureAwait(false);
+      return stream is null ? null : await JsonSerializer.DeserializeAsync(stream, TaskStoreJsonContext.Default.TaskRecord, cancellationToken).ConfigureAwait(false);
     }
     catch (JsonException)
     {
