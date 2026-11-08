@@ -11,6 +11,10 @@ block may be in flight to the stream. Writers wait **before copying** when the q
 input while that queue is full, and awaits rejection writes, so a peer that never reads cannot create an unbounded backlog of replies.
 Handler concurrency remains subject to `ContextServerOptions.MaxConcurrentRequests` (256 by default).
 
+The cost of that bound: a single-threaded peer that writes more than about 1 MiB of requests before reading any response can block
+against the paused input, because the server stops reading until its replies are read. Clients should read and write concurrently, as
+the protocol already expects.
+
 ## EOF and shutdown
 
 Input EOF is a half-close: admitted handlers may finish and their queued replies are drained before output closes.

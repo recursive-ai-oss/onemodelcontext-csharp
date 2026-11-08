@@ -8,7 +8,7 @@
     <IsPackable>true</IsPackable>
     <IsTrimmable>true</IsTrimmable>
     <IsAotCompatible>true</IsAotCompatible>
-    <Description>OneModelContext: a .NET SDK for the Model Context Protocol®. Client and server for the 2026-07-28 revision and the legacy revisions back to 2024-11-05, over stdio and duplex streams, with a source generator for tools. Pre-release; unpublished. Unaffiliated with 1MCP, the Go OneMCP aggregator and the Model Context Protocol project.</Description>
+    <Description>OneModelContext: a .NET SDK for the Model Context Protocol®. Client and server for the 2026-07-28 revision and the legacy revisions back to 2024-11-05, over stdio and duplex streams, with a source generator for tools. Pre-release; unpublished. Model Context Protocol® is a registered trademark of LF Projects, LLC; OneModelContext is independent and not affiliated with or endorsed by LF Projects, LLC or the Model Context Protocol project.</Description>
   </PropertyGroup>
 
   <!-- Roots, Sampling and Logging are marked [Obsolete] for users (OMC0001 to OMC0003), but this library implements them in full, in code the

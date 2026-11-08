@@ -6,7 +6,7 @@
     <RootNamespace>RecursiveAI.OneModelContext.EntityFrameworkCore</RootNamespace>
     <PackageId>$(PackagePrefix).OneModelContext.EntityFrameworkCore</PackageId>
     <IsPackable>true</IsPackable>
-    <Description>Entity Framework Core stores for OneModelContext: a .NET SDK for the Model Context Protocol®. Durable, multi-instance IAuthorizationStore, ITokenStore and ITaskStore as entity configurations on your own DbContext. Pre-release; unpublished. Unaffiliated with 1MCP, the Go OneMCP aggregator and the Model Context Protocol project.</Description>
+    <Description>Entity Framework Core stores for OneModelContext: a .NET SDK for the Model Context Protocol®. Durable, multi-instance IAuthorizationStore, ITokenStore and ITaskStore as entity configurations on your own DbContext. Pre-release; unpublished. Model Context Protocol® is a registered trademark of LF Projects, LLC; OneModelContext is independent and not affiliated with or endorsed by LF Projects, LLC or the Model Context Protocol project.</Description>
     <PackageTags>$(PackageTags);entity-framework-core;oauth;authorization-server</PackageTags>
   </PropertyGroup>
 

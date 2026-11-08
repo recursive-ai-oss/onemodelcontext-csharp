@@ -10,7 +10,7 @@
     <IsAotCompatible>true</IsAotCompatible>
     <!-- Sampling is deprecated in the 2026-07-28 revision but still answered on earlier ones; the adapter implements it on purpose. -->
     <NoWarn>$(NoWarn);OMC0002</NoWarn>
-    <Description>Microsoft.Extensions.AI integration for OneModelContext: a .NET SDK for the Model Context Protocol®. A client's tools become AIFunctions for any IChatClient, AIFunctions become server tools, and Sampling requests are answered by any IChatClient. Pre-release; unpublished. Unaffiliated with 1MCP, the Go OneMCP aggregator and the Model Context Protocol project.</Description>
+    <Description>Microsoft.Extensions.AI integration for OneModelContext: a .NET SDK for the Model Context Protocol®. A client's tools become AIFunctions for any IChatClient, AIFunctions become server tools, and Sampling requests are answered by any IChatClient. Pre-release; unpublished. Model Context Protocol® is a registered trademark of LF Projects, LLC; OneModelContext is independent and not affiliated with or endorsed by LF Projects, LLC or the Model Context Protocol project.</Description>
   </PropertyGroup>
 
   <!-- The adapter's only dependencies are the core package and the Microsoft.Extensions.AI abstractions. -->
