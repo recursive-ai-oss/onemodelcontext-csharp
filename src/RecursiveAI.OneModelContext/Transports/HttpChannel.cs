@@ -512,7 +512,17 @@ internal sealed class HttpChannel : IJsonRpcChannel, IConcurrentWriteChannel
     var mediaType = response.Content.Headers.ContentType?.MediaType;
     if (status == 200 && string.Equals(mediaType, "application/json", StringComparison.OrdinalIgnoreCase))
     {
-      var (body, length) = await ReadBodyAsync(response.Content, _options.MaxResponseBodyBytes, ct).ConfigureAwait(false);
+      byte[]? body;
+      int length;
+      try
+      {
+        (body, length) = await ReadBodyAsync(response.Content, _options.MaxResponseBodyBytes, ct).ConfigureAwait(false);
+      }
+      catch (Exception ex) when (ex is IOException or HttpRequestException)
+      {
+        await FailAsync(call, "Could not read the response body (" + ex.GetType().Name + ").", null, null, ct, ex).ConfigureAwait(false);
+        return Outcome.Done;
+      }
       if (body is null)
       {
         await FailAsync(call, "The server's response is larger than " + _options.MaxResponseBodyBytes + " bytes.", null, null, ct).ConfigureAwait(false);
@@ -1241,16 +1251,7 @@ internal sealed class HttpChannel : IJsonRpcChannel, IConcurrentWriteChannel
           return (null, 0);
         }
 
-        int read;
-        try
-        {
-          read = await stream.ReadAsync(rented.AsMemory(length, room), ct).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is IOException or HttpRequestException)
-        {
-          ArrayPool<byte>.Shared.Return(rented, clearArray: true);
-          return (null, 0);
-        }
+        var read = await stream.ReadAsync(rented.AsMemory(length, room), ct).ConfigureAwait(false);
 
         if (read == 0)
         {

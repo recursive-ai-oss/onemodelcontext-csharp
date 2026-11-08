@@ -320,11 +320,11 @@ public sealed class StreamableHttpEndpoint : IDisposable
     switch (method)
     {
       case Methods.ToolsCall:
-        return parameters.TryGetProperty("name", out var tool) && tool.ValueKind == JsonValueKind.String && _server.Tools.TryGet(tool.GetString()!, out var toolDefinition, out _)
+        return ServerFeatures.NameOf(method, parameters) is { } toolName && _server.Tools.TryGet(toolName, out var toolDefinition, out _)
           ? toolDefinition.RequiredScopes
           : null;
       case Methods.PromptsGet:
-        return parameters.TryGetProperty("name", out var prompt) && prompt.ValueKind == JsonValueKind.String && _server.Prompts.TryGet(prompt.GetString()!, out var promptDefinition, out _)
+        return ServerFeatures.NameOf(method, parameters) is { } promptName && _server.Prompts.TryGet(promptName, out var promptDefinition, out _)
           ? promptDefinition.RequiredScopes
           : null;
       case Methods.ResourcesRead:
@@ -961,10 +961,22 @@ public sealed class StreamableHttpEndpoint : IDisposable
 
       if (rpcRequest.Params.ValueKind == JsonValueKind.Object
         && rpcRequest.Params.TryGetProperty(nameProperty, out var bodyName)
-        && bodyName.ValueKind == JsonValueKind.String
-        && (!HeaderValue.TryDecode(nameHeaders[0], out var name) || !string.Equals(name, bodyName.GetString(), StringComparison.Ordinal)))
+        && bodyName.ValueKind == JsonValueKind.String)
       {
-        return new HeaderMismatchException("Header mismatch: " + WireNames.HeaderName + " does not match the request body.");
+        string? bodyNameText;
+        try
+        {
+          bodyNameText = bodyName.GetString();
+        }
+        catch (InvalidOperationException)
+        {
+          return new ProtocolException(JsonRpcErrorCodes.InvalidParams, "Invalid params: name is not a valid string.");
+        }
+
+        if (!HeaderValue.TryDecode(nameHeaders[0], out var name) || !string.Equals(name, bodyNameText, StringComparison.Ordinal))
+        {
+          return new HeaderMismatchException("Header mismatch: " + WireNames.HeaderName + " does not match the request body.");
+        }
       }
     }
 

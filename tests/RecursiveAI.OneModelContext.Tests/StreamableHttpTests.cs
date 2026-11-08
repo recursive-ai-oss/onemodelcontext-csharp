@@ -60,6 +60,16 @@ public class StreamableHttpTests
 
   // ---- modern ----------------------------------------------------------------------------------------------------------------
 
+  [Theory]
+  [InlineData("bad\\ud800")]
+  [InlineData("bad\\udc00")]
+  public async Task Malformed_tool_name_encoding_is_invalid_params_before_header_comparison(string name)
+  {
+    using var endpoint = new StreamableHttpEndpoint(new ContextServer("test", "1"));
+    using var exchange = TestExchange.Post(Call(name), ModernHeaders()).Run(endpoint);
+    await ErrorOf(exchange, 400, JsonRpcErrorCodes.InvalidParams);
+  }
+
   [Fact]
   public async Task A_modern_call_with_matching_headers_gets_a_json_result()
   {

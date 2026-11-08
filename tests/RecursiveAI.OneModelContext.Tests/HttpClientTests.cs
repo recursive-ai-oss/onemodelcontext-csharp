@@ -528,6 +528,32 @@ public class HttpClientTests
     Assert.Single(setup.Handler.Sent, r => r.RpcMethod == "tools/call");
   }
 
+  [Theory]
+  [InlineData("2026-07-28")]
+  [InlineData("2025-11-25")]
+  [InlineData("2025-06-18")]
+  [InlineData("2025-03-26")]
+  [InlineData("2024-11-05")]
+  public async Task A_response_body_IO_error_is_not_reported_as_a_size_limit(string version)
+  {
+    var setup = new Setup(NewServer());
+    setup.Handler.Intercept = (sent, _, _) => Task.FromResult<HttpResponseMessage?>(sent.RpcMethod == "tools/call" ? new HttpResponseMessage(HttpStatusCode.OK)
+    {
+      Content = new StreamContent(new FailingBodyStream()) { Headers = { ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json") } },
+    } : null);
+    await setup.ConnectAsync(Options(version == "2026-07-28" ? EraPreference.Modern : EraPreference.Legacy, version));
+    await using var owned = setup;
+    var error = await Assert.ThrowsAsync<TransportException>(async () => await setup.Client.CallToolAsync("echo", default, TestContext.Current.CancellationToken));
+    Assert.Contains("IOException", error.Message, StringComparison.Ordinal);
+    Assert.DoesNotContain("larger", error.Message, StringComparison.Ordinal);
+  }
+
+  private sealed class FailingBodyStream : System.IO.MemoryStream
+  {
+    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+      ValueTask.FromException<int>(new System.IO.IOException("Synthetic broken response body."));
+  }
+
   [Fact]
   public async Task An_event_larger_than_the_limit_fails_that_request_and_nothing_else()
   {
