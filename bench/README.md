@@ -34,6 +34,8 @@ What cannot be made equal, and how it is handled:
 - The reference's HTTP server runs in its stateless mode, which is also how OneModelContext's modern era works. The raw load uses the older session flow (an `initialize` first), which both accept, so the row compares like with like; a second, information-only pass sends self-contained 2026-07-28 requests.
 - Allocation per call is `GC.GetTotalAllocatedBytes` across the whole process divided by calls (the server's through the `bench_stats` tool), so it includes background work.
 
+HTTP client pairings use a separate server process for each client, with an equal unmeasured load pass of at least four seconds before the measured pass. This keeps tiered compilation in a shared server from favouring whichever client runs second.
+
 ## Rows
 
 | Row | What | Gate |

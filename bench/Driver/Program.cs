@@ -133,17 +133,25 @@ internal static class Program
       var r = Procs.RunClient(bin, "ref", stdioServer, "call", seq, 16, seconds, 500);
       Rows.Add(new Row($"r3-stdio-{fixedStack}", $"client calls/s over stdio against the {fixedStack} server", "calls/s", gated, Num(o, "callsPerSec"), Num(r, "callsPerSec"), true, Alloc(o, r)));
 
-      var (server, url) = Procs.StartHttp(bin, fixedStack, "kestrel");
-      try
-      {
-        var ho = Procs.RunClient(bin, "ours", url, "call", seq, 16, seconds, 500);
-        var hr = Procs.RunClient(bin, "ref", url, "call", seq, 16, seconds, 500);
-        Rows.Add(new Row($"r3-http-{fixedStack}", $"client calls/s over Streamable HTTP against the {fixedStack} server on Kestrel", "calls/s", gated, Num(ho, "callsPerSec"), Num(hr, "callsPerSec"), true, Alloc(ho, hr)));
-      }
-      finally
-      {
-        Procs.Stop(server);
-      }
+      var ho = HttpClientCalls(bin, fixedStack, "ours", seq, seconds);
+      var hr = HttpClientCalls(bin, fixedStack, "ref", seq, seconds);
+      Rows.Add(new Row($"r3-http-{fixedStack}", $"client calls/s over Streamable HTTP against the {fixedStack} server on Kestrel", "calls/s", gated, Num(ho, "callsPerSec"), Num(hr, "callsPerSec"), true, Alloc(ho, hr)));
+    }
+  }
+
+  private static JsonElement HttpClientCalls(string bin, string serverStack, string clientStack, int seq, double seconds)
+  {
+    // Each client gets its own server and the same unmeasured load pass. Reusing one server gave the second client a tiered-JIT
+    // warmup advantage: reversing the client order moved the extra server CPU to whichever client ran first.
+    var (server, url) = Procs.StartHttp(bin, serverStack, "kestrel");
+    try
+    {
+      _ = Procs.RunClient(bin, clientStack, url, "call", seq, 16, Math.Max(4, seconds), 500);
+      return Procs.RunClient(bin, clientStack, url, "call", seq, 16, seconds, 500);
+    }
+    finally
+    {
+      Procs.Stop(server);
     }
   }
 
