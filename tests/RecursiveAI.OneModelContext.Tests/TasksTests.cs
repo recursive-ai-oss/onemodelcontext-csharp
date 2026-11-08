@@ -396,32 +396,60 @@ public class TasksTests
     await stop();
   }
 
-  [Fact]
+  [Fact(Timeout = 30_000)]
   public async Task Tasks_survive_a_restart_with_the_file_store()
   {
+    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+    timeout.CancelAfter(TimeSpan.FromSeconds(15));
+    var token = timeout.Token;
+    var storageFailure = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    using var diagnostics = Diagnostics.ContextDiagnostics.Subscribe(e =>
+    {
+      if (e.Method == TasksExtension.GetMethod && e.Kind == Diagnostics.DiagnosticKind.HandlerFault && e.Exception is { } exception)
+      {
+        storageFailure.TrySetException(exception);
+      }
+    });
     var directory = Path.Combine(Path.GetTempPath(), "omc-tasks-" + Guid.NewGuid().ToString("N"));
     try
     {
       string taskId;
+      TaskRecord persisted;
       using (var store = new FileTaskStore(directory))
       {
         var server = NewServer(Quick(store));
         server.AddTaskTool(new ToolDefinition("work", "Works.", ObjectSchema), (_, _) => ValueTask.FromResult(CallToolResult.FromText("kept")));
         var (client, stop) = await ConnectAsync(server, EraPreference.Modern, ProtocolVersions.V20260728);
-        var task = (await client.CallToolAsTaskAsync("work", cancellationToken: Ct)).Task!;
-        taskId = task.TaskId;
-        Assert.Equal(TaskStates.Completed, (await task.WaitAsync(Ct)).Status);
-        await stop();
+        try
+        {
+          var task = (await client.CallToolAsTaskAsync("work", cancellationToken: token)).Task!;
+          taskId = task.TaskId;
+          var completion = task.WaitAsync(token).AsTask();
+          // A background persistence fault must fail here with its stack, not poll until the one-hour TTL expires.
+          await (await Task.WhenAny(completion, storageFailure.Task));
+          Assert.Equal(TaskStates.Completed, (await completion).Status);
+          persisted = (await store.GetAsync(taskId, token))!;
+        }
+        finally
+        {
+          await stop();
+        }
       }
 
-      // A new server object (a restart, or a second instance) over the same directory answers for the task.
       using var again = new FileTaskStore(directory);
+      Assert.Equal(persisted, await again.GetAsync(taskId, token));
       var restarted = NewServer(Quick(again));
       var (client2, stop2) = await ConnectAsync(restarted, EraPreference.Modern, ProtocolVersions.V20260728);
-      var resumed = await client2.GetTaskAsync(taskId, Ct);
-      Assert.Equal(TaskStates.Completed, resumed.Latest.Status);
-      Assert.Equal("kept", resumed.Latest.Result!.Text);
-      await stop2();
+      try
+      {
+        var resumed = await client2.GetTaskAsync(taskId, token);
+        Assert.Equal(TaskStates.Completed, resumed.Latest.Status);
+        Assert.Equal("kept", resumed.Latest.Result!.Text);
+      }
+      finally
+      {
+        await stop2();
+      }
     }
     finally
     {
@@ -507,6 +535,64 @@ public class TasksTests
         Assert.True(await store.DeleteAsync("b", Ct));
         Assert.False(await store.DeleteAsync("b", Ct));
       }
+    }
+    finally
+    {
+      if (Directory.Exists(directory))
+      {
+        Directory.Delete(directory, recursive: true);
+      }
+    }
+  }
+
+  [Fact(Timeout = 20_000)]
+  public async Task File_store_updates_remain_visible_while_other_instances_are_reading()
+  {
+    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+    timeout.CancelAfter(TimeSpan.FromSeconds(10));
+    var token = timeout.Token;
+    var directory = Path.Combine(Path.GetTempPath(), "omc-poll-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+      using var writer = new FileTaskStore(directory);
+      using var reader = new FileTaskStore(directory);
+      var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+      var current = new TaskRecord { TaskId = "polling", Owner = "", ToolName = "t", Status = TaskStates.Working, CreatedAt = now, LastUpdatedAt = now, TtlMs = 60_000 };
+      await writer.CreateAsync(current, token);
+      using var stopReaders = CancellationTokenSource.CreateLinkedTokenSource(token);
+      async Task ReadRepeatedlyAsync()
+      {
+        try
+        {
+          while (true)
+          {
+            stopReaders.Token.ThrowIfCancellationRequested();
+            var record = await reader.GetAsync(current.TaskId, stopReaders.Token);
+            Assert.NotNull(record);
+            Assert.Equal(now.AddMinutes(1), record.ExpiresAt);
+          }
+        }
+        catch (OperationCanceledException) when (stopReaders.IsCancellationRequested)
+        {
+          // The writer finished or the test reached its deadline.
+        }
+      }
+
+      var readers = new[] { Task.Run(ReadRepeatedlyAsync, token), Task.Run(ReadRepeatedlyAsync, token) };
+      try
+      {
+        for (var i = 0; i < 200; i++)
+        {
+          current = (await writer.UpdateAsync(current with { StatusMessage = "update " + i }, token))!;
+          Assert.NotNull(current);
+        }
+      }
+      finally
+      {
+        await stopReaders.CancelAsync();
+        await Task.WhenAll(readers);
+      }
+      Assert.Equal(200, (await reader.GetAsync(current.TaskId, token))!.Version);
     }
     finally
     {

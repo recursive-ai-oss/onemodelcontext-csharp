@@ -36,6 +36,7 @@ internal sealed class ModernClientCodec : IClientCodec
       }
       catch (JsonRpcRemoteException remote)
       {
+        Diagnostics.ContextDiagnostics.Publish(Diagnostics.DiagnosticKind.Note, "Modern probe returned error " + remote.Code.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".", "negotiation");
         // basic/versioning, "Protocol Version Negotiation": on -32022 the client SHOULD pick a version from the server's list that it also
         // speaks and ask again, once; a second refusal is final.
         if (!retried && remote.Code == ProtocolErrorCodes.UnsupportedProtocolVersion
@@ -57,6 +58,7 @@ internal sealed class ModernClientCodec : IClientCodec
     }
     catch (JsonException)
     {
+      Diagnostics.ContextDiagnostics.Publish(Diagnostics.DiagnosticKind.Note, "Modern probe result could not be decoded.", "negotiation");
       // Something answered server/discover with a body that is not a DiscoverResult: not a modern server.
       return null;
     }
@@ -65,6 +67,7 @@ internal sealed class ModernClientCodec : IClientCodec
     var common = FirstCommonModern(hello.SupportedVersions, discover.SupportedVersions);
     if (common is null)
     {
+      Diagnostics.ContextDiagnostics.Publish(Diagnostics.DiagnosticKind.Note, "Modern probe advertised no compatible modern revision.", "negotiation");
       // A server that lists only legacy revisions is a legacy server; one that lists a newer modern revision than ours is a version problem.
       return HasModern(discover.SupportedVersions)
         ? throw new ProtocolVersionException(hello.SupportedVersions, discover.SupportedVersions, wanted)

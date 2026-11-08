@@ -303,6 +303,19 @@ public sealed class JwtValidatorTests : IDisposable
 
     Assert.Equal(["good"], set.Keys.Select(k => k.KeyId));
   }
+
+  [Theory]
+  [InlineData("P-256", 32)]
+  [InlineData("P-384", 48)]
+  [InlineData("P-521", 66)]
+  public void Off_curve_points_are_skipped_without_discarding_valid_keys(string curve, int coordinateBytes)
+  {
+    var coordinate = TestIssuer.B64(new byte[coordinateBytes]);
+    var json = "{\"keys\":[{\"kty\":\"EC\",\"crv\":\"" + curve + "\",\"x\":\"" + coordinate + "\",\"y\":\"" + coordinate + "\"}," + _issuer.RsaJwk("good") + "]}";
+    var set = JsonWebKeySet.Parse(Encoding.UTF8.GetBytes(json))!;
+    Assert.Equal(["good"], set.Keys.Select(k => k.KeyId));
+  }
+
 }
 
 public sealed class IntrospectionValidatorTests

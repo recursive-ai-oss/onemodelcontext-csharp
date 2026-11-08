@@ -560,6 +560,7 @@ public sealed partial class ContextClient : IAsyncDisposable
     var cache = options.Era == EraPreference.Auto && serverKey is not null ? options.EraCache : null;
     if (cache is not null && cache.TryGet(serverKey!, out var remembered))
     {
+      ContextDiagnostics.Publish(DiagnosticKind.Note, "Negotiation remembered " + remembered + ".", "negotiation");
       // The remembered era goes first; the others stay as the fallback in case the server changed.
       var index = codecs.FindIndex(c => c.Era == remembered);
       if (index > 0)
@@ -573,11 +574,13 @@ public sealed partial class ContextClient : IAsyncDisposable
     for (var i = 0; i < codecs.Count; i++)
     {
       var codec = codecs[i];
+      ContextDiagnostics.Publish(DiagnosticKind.Note, "Negotiation trying " + codec.Era + ".", "negotiation");
       var session = i == codecs.Count - 1
         ? await codec.NegotiateAsync(rpc, hello, cancellationToken).ConfigureAwait(false)
         : await ProbeAsync(codec, rpc, hello, options, cancellationToken).ConfigureAwait(false);
       if (session is not null)
       {
+        ContextDiagnostics.Publish(DiagnosticKind.Note, "Negotiation selected " + session.Era + ".", "negotiation");
         cache?.Remember(serverKey!, session.Era);
         return session;
       }
@@ -602,6 +605,7 @@ public sealed partial class ContextClient : IAsyncDisposable
     }
     catch (OperationCanceledException) when (probe.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
     {
+      ContextDiagnostics.Publish(DiagnosticKind.Note, "Negotiation probe timed out for " + codec.Era + ".", "negotiation");
       // Silence: the server does not speak this era.
       return null;
     }

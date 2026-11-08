@@ -91,7 +91,15 @@ public sealed class JsonWebKey
           }
 
           var rsa = RSA.Create();
-          rsa.ImportParameters(new RSAParameters { Modulus = n, Exponent = e });
+          try
+          {
+            rsa.ImportParameters(new RSAParameters { Modulus = n, Exponent = e });
+          }
+          catch
+          {
+            rsa.Dispose();
+            throw;
+          }
           if (rsa.KeySize < MinRsaBits)
           {
             rsa.Dispose();
@@ -125,7 +133,8 @@ public sealed class JsonWebKey
           return false;
       }
     }
-    catch (Exception ex) when (ex is CryptographicException or ArgumentException or FormatException)
+    // Windows can report an invalid EC point as an unsupported curve rather than a CryptographicException.
+    catch (Exception ex) when (ex is CryptographicException or ArgumentException or FormatException or PlatformNotSupportedException)
     {
       return false;
     }
