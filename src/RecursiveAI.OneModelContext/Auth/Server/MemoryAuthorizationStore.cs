@@ -265,7 +265,7 @@ public sealed class FileAuthorizationStore : MemoryAuthorizationStore
     {
       try
       {
-        using var stream = File.OpenRead(_path);
+        using var stream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         Load(JsonSerializer.Deserialize(stream, AuthorizationStoreJson.Default.StoreState) ?? throw new InvalidDataException("The authorization store file is empty."));
       }
       catch (JsonException ex)
@@ -292,7 +292,15 @@ public sealed class FileAuthorizationStore : MemoryAuthorizationStore
         stream.Flush(flushToDisk: true);
       }
 
-      File.Move(temp, _path, overwrite: true);
+      // This store is single-process and serialized by the store gate; there are no concurrent writers.
+      if (File.Exists(_path))
+      {
+        File.Replace(temp, _path, destinationBackupFileName: null);
+      }
+      else
+      {
+        File.Move(temp, _path);
+      }
     }
     finally
     {

@@ -52,6 +52,9 @@ public sealed class TaskServerOptions
   /// <summary>Where tasks are kept. Default a new <see cref="MemoryTaskStore"/>, which suits one process; share a store between instances to run several.</summary>
   public ITaskStore? Store { get; init; }
 
+  /// <summary>Maximum duration to persist a background task's final outcome. Default 15 seconds; must be positive. Stores must honor cancellation. A persistence failure makes this instance refuse task requests with an internal error until the server is recreated, rather than return stale status.</summary>
+  public TimeSpan PersistenceTimeout { get; init; } = TimeSpan.FromSeconds(15);
+
   /// <summary>How long a task lives from creation; after that it is discarded and polls get an error. <c>null</c> means no limit. Default one hour.</summary>
   public TimeSpan? Ttl { get; init; } = TimeSpan.FromHours(1);
 

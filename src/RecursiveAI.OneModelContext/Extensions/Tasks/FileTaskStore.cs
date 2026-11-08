@@ -30,17 +30,24 @@ public sealed class FileTaskStore : ITaskStore, IDisposable
   private const string LockName = ".lock";
   private readonly string _directory;
   private readonly int _capacity;
+  private readonly int _replacementRetries;
+  private readonly TimeProvider _time;
   private readonly SemaphoreSlim _local = new(1, 1);
 
   /// <summary>Creates a store.</summary>
   /// <param name="directory">The directory; created when missing.</param>
   /// <param name="capacity">Most tasks held at once; <see cref="CreateAsync"/> refuses more. Default 10,000.</param>
-  public FileTaskStore(string directory, int capacity = 10_000)
+  /// <param name="replacementRetries">Retries on replacement sharing/access failures, 10 ms apart; default 200 (at most 2 seconds of delay). Zero disables retries. The final error is thrown.</param>
+  /// <param name="timeProvider">Clock for replacement retries; null uses <see cref="TimeProvider.System"/>.</param>
+  public FileTaskStore(string directory, int capacity = 10_000, int replacementRetries = 200, TimeProvider? timeProvider = null)
   {
     ArgumentException.ThrowIfNullOrEmpty(directory);
     ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 1);
     _directory = Path.GetFullPath(directory);
+    ArgumentOutOfRangeException.ThrowIfNegative(replacementRetries);
     _capacity = capacity;
+    _replacementRetries = replacementRetries;
+    _time = timeProvider ?? TimeProvider.System;
     if (OperatingSystem.IsWindows())
     {
       Directory.CreateDirectory(_directory);
@@ -189,7 +196,7 @@ public sealed class FileTaskStore : ITaskStore, IDisposable
   }
 
   // The temporary file is created with its final permissions, then renamed: readers see the old task or the new one.
-  private static async ValueTask WriteAsync(string path, TaskRecord task, CancellationToken cancellationToken)
+  private async ValueTask WriteAsync(string path, TaskRecord task, CancellationToken cancellationToken)
   {
     var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
     var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, Options = FileOptions.Asynchronous };
@@ -206,7 +213,7 @@ public sealed class FileTaskStore : ITaskStore, IDisposable
         await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
       }
 
-      File.Move(temporary, path, overwrite: true);
+      await Storage.AtomicFile.CommitAsync(temporary, path, _replacementRetries, _time, cancellationToken).ConfigureAwait(false);
     }
     catch
     {
@@ -214,9 +221,9 @@ public sealed class FileTaskStore : ITaskStore, IDisposable
       {
         File.Delete(temporary);
       }
-      catch (IOException)
+      catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
       {
-        // Nothing more to do for a temporary file that cannot be removed.
+        // Preserve the original write failure if cleanup also fails.
       }
 
       throw;

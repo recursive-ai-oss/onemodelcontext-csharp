@@ -545,6 +545,56 @@ public class TasksTests
     }
   }
 
+  private sealed class FailingOutcomeStore(bool stall) : ITaskStore
+  {
+    private readonly MemoryTaskStore _inner = new();
+    internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public ValueTask CreateAsync(TaskRecord task, CancellationToken cancellationToken = default) => _inner.CreateAsync(task, cancellationToken);
+    public ValueTask<TaskRecord?> GetAsync(string taskId, CancellationToken cancellationToken = default) => _inner.GetAsync(taskId, cancellationToken);
+    public ValueTask<bool> DeleteAsync(string taskId, CancellationToken cancellationToken = default) => _inner.DeleteAsync(taskId, cancellationToken);
+    public ValueTask<int> DeleteExpiredAsync(DateTimeOffset now, CancellationToken cancellationToken = default) => _inner.DeleteExpiredAsync(now, cancellationToken);
+    public async ValueTask<TaskRecord?> UpdateAsync(TaskRecord task, CancellationToken cancellationToken = default)
+    {
+      Entered.TrySetResult();
+      if (stall)
+      {
+        await Task.Delay(Timeout.Infinite, cancellationToken);
+      }
+      throw new IOException("Synthetic private storage details must not reach the client.");
+    }
+  }
+
+  [Theory(Timeout = 15_000)]
+  [InlineData(false)]
+  [InlineData(true)]
+  public async Task Outcome_storage_failure_or_timeout_fails_polling_instead_of_waiting_for_expiry(bool stall)
+  {
+    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+    timeout.CancelAfter(TimeSpan.FromSeconds(10));
+    var clock = new ManualTimeProvider();
+    var store = new FailingOutcomeStore(stall);
+    var server = NewServer(Quick(store), new ContextServerOptions { TimeProvider = clock });
+    server.AddTaskTool(new ToolDefinition("work", "Works.", ObjectSchema), (_, _) => ValueTask.FromResult(CallToolResult.FromText("done")));
+    var (client, stop) = await ConnectAsync(server, EraPreference.Modern, ProtocolVersions.V20260728);
+    try
+    {
+      var task = (await client.CallToolAsTaskAsync("work", cancellationToken: timeout.Token)).Task!;
+      await store.Entered.Task.WaitAsync(timeout.Token);
+      if (stall)
+      {
+        clock.Advance(TimeSpan.FromSeconds(16));
+      }
+      var failure = await Assert.ThrowsAsync<ProtocolException>(async () => await task.WaitAsync(timeout.Token));
+      Assert.Equal(JsonRpcErrorCodes.InternalError, failure.Code);
+      Assert.DoesNotContain("private storage", failure.Message, StringComparison.Ordinal);
+      Assert.Contains("storage is unavailable", failure.Message, StringComparison.Ordinal);
+    }
+    finally
+    {
+      await stop();
+    }
+  }
+
   [Fact(Timeout = 20_000)]
   public async Task File_store_updates_remain_visible_while_other_instances_are_reading()
   {

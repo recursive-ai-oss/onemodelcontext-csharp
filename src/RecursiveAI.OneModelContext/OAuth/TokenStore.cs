@@ -200,6 +200,7 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
   private readonly ITokenProtector? _protector;
   private readonly SemaphoreSlim _gate = new(1, 1);
   private readonly TimeProvider _time;
+  private readonly int _replacementRetries;
 
   // A leftover temporary file older than this was abandoned by a crash.
   private static readonly TimeSpan StaleTemporary = TimeSpan.FromMinutes(5);
@@ -207,10 +208,13 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
   /// <summary>Creates a store.</summary>
   /// <param name="path">The file. Its directory is created when missing. Choose a location only the user can read.</param>
   /// <param name="protector">Seals the file contents; null stores them as JSON protected by file permissions alone.</param>
-  /// <param name="timeProvider">The clock used to recognise abandoned temporary files; null for the system clock.</param>
-  public FileTokenStore(string path, ITokenProtector? protector = null, TimeProvider? timeProvider = null)
+  /// <param name="timeProvider">The clock for abandoned temporary files and replacement retries; null for the system clock.</param>
+  /// <param name="replacementRetries">Retries on replacement sharing/access failures, 10 ms apart; default 200 (at most 2 seconds of delay). Zero disables retries. The final error is thrown.</param>
+  public FileTokenStore(string path, ITokenProtector? protector = null, TimeProvider? timeProvider = null, int replacementRetries = 200)
   {
     ArgumentException.ThrowIfNullOrEmpty(path);
+    ArgumentOutOfRangeException.ThrowIfNegative(replacementRetries);
+    _replacementRetries = replacementRetries;
     _path = Path.GetFullPath(path);
     _protector = protector;
     _time = timeProvider ?? TimeProvider.System;
@@ -298,7 +302,7 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
     }
 
     byte[] bytes;
-    await using (var stream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1, useAsync: true))
+    await using (var stream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1, useAsync: true))
     {
       if (stream.Length > MaxFileBytes)
       {
@@ -400,7 +404,7 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
         await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
       }
 
-      File.Move(temporary, _path, overwrite: true);
+      await Storage.AtomicFile.CommitAsync(temporary, _path, _replacementRetries, _time, cancellationToken).ConfigureAwait(false);
     }
     catch
     {
