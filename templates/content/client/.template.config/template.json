@@ -13,7 +13,7 @@
     "libraryVersion": {
       "type": "parameter",
       "datatype": "text",
-      "defaultValue": "0.1.0-dev",
+      "defaultValue": "1.0.0",
       "replaces": "LIBRARY_VERSION",
       "description": "The RecursiveAI.OneModelContext package version to reference."
     }

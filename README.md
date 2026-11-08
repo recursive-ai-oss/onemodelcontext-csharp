@@ -1,6 +1,6 @@
 # OneModelContext: a .NET SDK for the Model Context Protocol®
 
-**Status: pre-release, unpublished.** Nothing here is on nuget.org yet, and the API may change before the first release.
+**Status: 1.0.** The public API is stable and checked by package validation. Tasks, Skills and Server Cards follow experimental MCP extensions and are marked `[Experimental]` until those extensions are stable.
 
 OneModelContext is a clean-room .NET 10 library for MCP, the Model Context Protocol, on both sides: client and server. The core package
 (`RecursiveAI.OneModelContext`) depends on the .NET base class library only, and is trim- and NativeAOT-safe.

@@ -15,7 +15,7 @@
     <NoWarn>$(NoWarn);NU5128</NoWarn>
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
     <EnablePackageValidation>false</EnablePackageValidation>
-    <Description>dotnet new templates for OneModelContext: a .NET SDK for the Model Context Protocol®. Adds onemodelcontext-server (stdio or HTTP) and onemodelcontext-client. Pre-release; unpublished. Model Context Protocol® is a registered trademark of LF Projects, LLC; OneModelContext is independent and not affiliated with or endorsed by LF Projects, LLC or the Model Context Protocol project.</Description>
+    <Description>dotnet new templates for OneModelContext: a .NET SDK for the Model Context Protocol®. Adds onemodelcontext-server (stdio or HTTP) and onemodelcontext-client. Model Context Protocol® is a registered trademark of LF Projects, LLC; OneModelContext is independent and not affiliated with or endorsed by LF Projects, LLC or the Model Context Protocol project.</Description>
     <PackageTags>dotnet-new;templates;mcp;model-context-protocol</PackageTags>
   </PropertyGroup>
 

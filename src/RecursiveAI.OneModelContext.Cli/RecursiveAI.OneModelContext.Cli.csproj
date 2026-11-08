@@ -11,7 +11,7 @@
     <ToolCommandName>onemodelcontext</ToolCommandName>
     <IsAotCompatible>true</IsAotCompatible>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <Description>The onemodelcontext command line tool for OneModelContext: a .NET SDK for the Model Context Protocol®. Pre-release; unpublished. Model Context Protocol® is a registered trademark of LF Projects, LLC; OneModelContext is independent and not affiliated with or endorsed by LF Projects, LLC or the Model Context Protocol project.</Description>
+    <Description>The onemodelcontext command line tool for OneModelContext: a .NET SDK for the Model Context Protocol®. Model Context Protocol® is a registered trademark of LF Projects, LLC; OneModelContext is independent and not affiliated with or endorsed by LF Projects, LLC or the Model Context Protocol project.</Description>
   </PropertyGroup>
 
   <!-- Pass -p:SmokeMode=aot to publish a native executable. It is a project property, not PublishAot itself, because a global

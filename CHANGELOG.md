@@ -4,6 +4,8 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+## [1.0.0]
+
 ### Fixed
 
 - Stdio output shutdown follows write progress within the EOF linger bound; queued writes apply backpressure to input and are safe

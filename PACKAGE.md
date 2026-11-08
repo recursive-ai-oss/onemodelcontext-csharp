@@ -1,6 +1,6 @@
 # OneModelContext: a .NET SDK for the Model Context Protocol®
 
-**Pre-release, unpublished.** This package is not on nuget.org yet; the API will change until the first release.
+**1.0.** The public API is stable. Tasks, Skills and Server Cards are marked `[Experimental]` until their MCP extensions are stable.
 
 OneModelContext is a clean-room .NET 10 library for MCP, the Model Context Protocol, on both sides. The core package depends on the .NET
 base class library only and is trim- and NativeAOT-safe.
