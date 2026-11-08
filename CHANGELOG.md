@@ -4,6 +4,8 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+## [1.0.1]
+
 ### Added
 
 - Tool-call argument overloads for ordinary C# objects and source-generated JSON metadata.
