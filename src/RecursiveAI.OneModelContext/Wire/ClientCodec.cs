@@ -20,7 +20,7 @@ public sealed class ClientHello
   /// <summary>The revisions the client speaks, newest first.</summary>
   public required IReadOnlyList<string> SupportedVersions { get; init; }
 
-  /// <summary>The clock for timeouts.</summary>
+  /// <summary>The clock for negotiation timeouts. Default <see cref="TimeProvider.System"/>.</summary>
   public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
   /// <summary>
@@ -28,6 +28,9 @@ public sealed class ClientHello
   /// the error can name what both sides speak. Codecs add to it; it is not part of what the client offers.
   /// </summary>
   internal List<string> ServerVersionsSeen { get; } = [];
+
+  // Silence, transport failures and malformed responses do not prove that an era is unsupported.
+  internal bool ProbeInconclusive { get; set; }
 }
 
 /// <summary>The outcome of negotiation: what the client and server agreed on, and the codec that carries it.</summary>
@@ -99,6 +102,7 @@ public interface IClientCodec
   /// <param name="connection">The connection to the server.</param>
   /// <param name="hello">What the client offers.</param>
   /// <param name="cancellationToken">Cancels negotiation.</param>
+  /// <remarks>Custom codecs should propagate timeouts and transport exceptions, not convert them to null: an inconclusive failure must not teach the era cache that the server lacks this era.</remarks>
   /// <exception cref="ProtocolVersionException">The server speaks this era but no revision in common.</exception>
   ValueTask<ClientSession?> NegotiateAsync(JsonRpcConnection connection, ClientHello hello, CancellationToken cancellationToken);
 

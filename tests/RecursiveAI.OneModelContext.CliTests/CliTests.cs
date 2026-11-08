@@ -7,10 +7,21 @@ namespace RecursiveAI.OneModelContext.CliTests;
 
 public sealed class CliTests
 {
+  private static readonly System.Collections.Concurrent.ConcurrentQueue<string> NegotiationNotes = new();
+  // Keep earlier connections too: a cached fallback can have originated in an earlier command.
+  private static readonly IDisposable NegotiationSubscription = Diagnostics.ContextDiagnostics.Subscribe(e =>
+  {
+    if (e.Method == "negotiation")
+    {
+      NegotiationNotes.Enqueue(e.Message);
+    }
+  });
+
   private static readonly string Server = "dotnet \"" + typeof(CliTests).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>().Single(a => a.Key == "TestServerDll").Value + "\"";
 
   private static async Task<(int Code, string Out, string Err)> RunAsync(string stdin, params string[] args)
   {
+    NegotiationNotes.Enqueue("Command: " + (args.Length == 0 ? "help" : args[0]));
     var output = new StringWriter();
     var error = new StringWriter();
     var app = new CliApp(output, error, new StringReader(stdin), "test", colour: false);
@@ -26,7 +37,7 @@ public sealed class CliTests
   {
     var (code, text, _) = await RunAsync("", "inspect", Server, "--era", era);
     Assert.Equal(0, code);
-    Assert.Contains($"protocol: {version} ({expected} era)", text);
+    Assert.True(text.Contains($"protocol: {version} ({expected} era)", StringComparison.Ordinal), text + "\n" + string.Join("\n", NegotiationNotes));
     Assert.Contains("echo", text);
     Assert.Contains("test://hello", text);
     Assert.Contains("greet", text);
@@ -39,7 +50,7 @@ public sealed class CliTests
     var (code, text, _) = await RunAsync("", "inspect", Server, "--json");
     Assert.Equal(0, code);
     using var doc = JsonDocument.Parse(text);
-    Assert.Equal("modern", doc.RootElement.GetProperty("era").GetString());
+    Assert.True(doc.RootElement.GetProperty("era").GetString() == "modern", text + "\n" + string.Join("\n", NegotiationNotes));
     Assert.Equal("onemodelcontext-testserver", doc.RootElement.GetProperty("serverInfo").GetProperty("name").GetString());
     Assert.Equal(4, doc.RootElement.GetProperty("tools").GetArrayLength());
   }
@@ -200,6 +211,7 @@ public sealed class CliTests
 
   private static async Task<(CliApp App, Task<int> Run, StringWriter Out, StringWriter Err, CancellationTokenSource Stop)> StartProxyAsync(params string[] args)
   {
+    NegotiationNotes.Enqueue("Command: " + (args.Length == 0 ? "help" : args[0]));
     var output = new StringWriter();
     var error = new StringWriter();
     var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);

@@ -30,17 +30,24 @@ public sealed class FileTaskStore : ITaskStore, IDisposable
   private const string LockName = ".lock";
   private readonly string _directory;
   private readonly int _capacity;
+  private readonly int _replacementRetries;
+  private readonly TimeProvider _time;
   private readonly SemaphoreSlim _local = new(1, 1);
 
   /// <summary>Creates a store.</summary>
   /// <param name="directory">The directory; created when missing.</param>
   /// <param name="capacity">Most tasks held at once; <see cref="CreateAsync"/> refuses more. Default 10,000.</param>
-  public FileTaskStore(string directory, int capacity = 10_000)
+  /// <param name="replacementRetries">Retries on Windows read contention/transient replacement misses and replacement sharing/access failures, 10 ms apart; default 200 (at most 2 seconds of delay). Zero disables retries. Closed temporary files count as recent for half this delay budget (minimum 10 ms); local in-flight writes remain evidence, but reads still respect the budget. The final error is thrown.</param>
+  /// <param name="timeProvider">Clock for replacement retries; null uses <see cref="TimeProvider.System"/>.</param>
+  public FileTaskStore(string directory, int capacity = 10_000, int replacementRetries = 200, TimeProvider? timeProvider = null)
   {
     ArgumentException.ThrowIfNullOrEmpty(directory);
     ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 1);
     _directory = Path.GetFullPath(directory);
+    ArgumentOutOfRangeException.ThrowIfNegative(replacementRetries);
     _capacity = capacity;
+    _replacementRetries = replacementRetries;
+    _time = timeProvider ?? TimeProvider.System;
     if (OperatingSystem.IsWindows())
     {
       Directory.CreateDirectory(_directory);
@@ -166,20 +173,12 @@ public sealed class FileTaskStore : ITaskStore, IDisposable
     return Path.Combine(_directory, taskId + Extension);
   }
 
-  private static async ValueTask<TaskRecord?> ReadAsync(string path, CancellationToken cancellationToken)
+  private async ValueTask<TaskRecord?> ReadAsync(string path, CancellationToken cancellationToken)
   {
     try
     {
-      await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.Asynchronous);
-      return await JsonSerializer.DeserializeAsync(stream, TaskStoreJsonContext.Default.TaskRecord, cancellationToken).ConfigureAwait(false);
-    }
-    catch (FileNotFoundException)
-    {
-      return null;
-    }
-    catch (DirectoryNotFoundException)
-    {
-      return null;
+      await using var stream = await Storage.AtomicFile.OpenReadAsync(path, _replacementRetries, _time, cancellationToken).ConfigureAwait(false);
+      return stream is null ? null : await JsonSerializer.DeserializeAsync(stream, TaskStoreJsonContext.Default.TaskRecord, cancellationToken).ConfigureAwait(false);
     }
     catch (JsonException)
     {
@@ -189,8 +188,9 @@ public sealed class FileTaskStore : ITaskStore, IDisposable
   }
 
   // The temporary file is created with its final permissions, then renamed: readers see the old task or the new one.
-  private static async ValueTask WriteAsync(string path, TaskRecord task, CancellationToken cancellationToken)
+  private async ValueTask WriteAsync(string path, TaskRecord task, CancellationToken cancellationToken)
   {
+    using var writing = Storage.AtomicFile.BeginWrite(path);
     var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
     var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, Options = FileOptions.Asynchronous };
     if (!OperatingSystem.IsWindows())
@@ -206,7 +206,7 @@ public sealed class FileTaskStore : ITaskStore, IDisposable
         await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
       }
 
-      File.Move(temporary, path, overwrite: true);
+      await Storage.AtomicFile.CommitAsync(temporary, path, _replacementRetries, _time, cancellationToken).ConfigureAwait(false);
     }
     catch
     {
@@ -214,9 +214,9 @@ public sealed class FileTaskStore : ITaskStore, IDisposable
       {
         File.Delete(temporary);
       }
-      catch (IOException)
+      catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
       {
-        // Nothing more to do for a temporary file that cannot be removed.
+        // Preserve the original write failure if cleanup also fails.
       }
 
       throw;

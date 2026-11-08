@@ -200,6 +200,7 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
   private readonly ITokenProtector? _protector;
   private readonly SemaphoreSlim _gate = new(1, 1);
   private readonly TimeProvider _time;
+  private readonly int _replacementRetries;
 
   // A leftover temporary file older than this was abandoned by a crash.
   private static readonly TimeSpan StaleTemporary = TimeSpan.FromMinutes(5);
@@ -207,10 +208,13 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
   /// <summary>Creates a store.</summary>
   /// <param name="path">The file. Its directory is created when missing. Choose a location only the user can read.</param>
   /// <param name="protector">Seals the file contents; null stores them as JSON protected by file permissions alone.</param>
-  /// <param name="timeProvider">The clock used to recognise abandoned temporary files; null for the system clock.</param>
-  public FileTokenStore(string path, ITokenProtector? protector = null, TimeProvider? timeProvider = null)
+  /// <param name="timeProvider">The clock for abandoned temporary files and replacement retries; null for the system clock.</param>
+  /// <param name="replacementRetries">Retries on Windows read contention/transient replacement misses and replacement sharing/access failures, 10 ms apart; default 200 (at most 2 seconds of delay). Zero disables retries. Closed temporary files count as recent for half this delay budget (minimum 10 ms); local in-flight writes remain evidence, but reads still respect the budget. The final error is thrown.</param>
+  public FileTokenStore(string path, ITokenProtector? protector = null, TimeProvider? timeProvider = null, int replacementRetries = 200)
   {
     ArgumentException.ThrowIfNullOrEmpty(path);
+    ArgumentOutOfRangeException.ThrowIfNegative(replacementRetries);
+    _replacementRetries = replacementRetries;
     _path = Path.GetFullPath(path);
     _protector = protector;
     _time = timeProvider ?? TimeProvider.System;
@@ -286,7 +290,7 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
   private async Task<(Dictionary<string, TokenRecord> Entries, string? Problem)> LoadAsync(CancellationToken cancellationToken)
   {
     var result = new Dictionary<string, TokenRecord>(StringComparer.Ordinal);
-    if (!File.Exists(_path))
+    if (!OperatingSystem.IsWindows() && !File.Exists(_path))
     {
       return (result, null);
     }
@@ -298,8 +302,12 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
     }
 
     byte[] bytes;
-    await using (var stream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1, useAsync: true))
+    await using (var stream = await Storage.AtomicFile.OpenReadAsync(_path, _replacementRetries, _time, cancellationToken, bufferSize: 1).ConfigureAwait(false))
     {
+      if (stream is null)
+      {
+        return (result, null);
+      }
       if (stream.Length > MaxFileBytes)
       {
         return (result, "the file is larger than a token store should be.");
@@ -347,6 +355,7 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
 
   private async Task SaveAsync(Dictionary<string, TokenRecord> all, CancellationToken cancellationToken)
   {
+    using var writing = Storage.AtomicFile.BeginWrite(_path);
     using var buffer = new MemoryStream();
     using (var writer = new Utf8JsonWriter(buffer))
     {
@@ -400,7 +409,7 @@ public sealed class FileTokenStore : ITokenStore, IDisposable
         await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
       }
 
-      File.Move(temporary, _path, overwrite: true);
+      await Storage.AtomicFile.CommitAsync(temporary, _path, _replacementRetries, _time, cancellationToken).ConfigureAwait(false);
     }
     catch
     {

@@ -45,8 +45,16 @@ jobs:
       - name: Native AOT toolchain (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang zlib1g-dev
-      - name: Publish the AOT smoke program (warnings are errors)
-        run: dotnet publish tests/RecursiveAI.OneModelContext.AotSmoke -c Release -p:SmokeMode=aot -r ${{ matrix.rid }} -o "${{ runner.temp }}/smoke" -warnaserror
+      - name: Publish the AOT smoke program (IL and AOT warnings are errors)
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet publish tests/RecursiveAI.OneModelContext.AotSmoke -c Release -p:SmokeMode=aot -r ${{ matrix.rid }} -o "$RUNNER_TEMP/smoke" 2>&1 | tee "$RUNNER_TEMP/aot-publish.log"
+          # Keep compiler and IL warnings fatal, without promoting native linker debug-info notices.
+          if grep -Ei 'warning[[:space:]]+(IL[0-9]+|AOT)' "$RUNNER_TEMP/aot-publish.log"; then
+            echo "IL or AOT warnings found during publish" >&2
+            exit 1
+          fi
       - name: Run the AOT smoke program
         shell: bash
         run: |
@@ -88,7 +96,7 @@ jobs:
       - name: Run the authorization scenarios on the conformance client
         run: |
           dotnet build conformance/Client -c Release
-          conformance/run.sh regression --only client --out "$RUNNER_TEMP/conformance-results-client" --command "dotnet $ArtifactsPath/bin/RecursiveAI.OneModelContext.ConformanceClient/release/conformance-client.dll"
+          conformance/run.sh regression --only client --out "$RUNNER_TEMP/conformance-results-client" --command "dotnet $ArtifactsPath/bin/RecursiveAI.OneModelContext.ConformanceClient/release/RecursiveAI.OneModelContext.ConformanceClient.dll"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

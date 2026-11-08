@@ -63,9 +63,11 @@ internal sealed class TaskService
   private readonly ConcurrentDictionary<string, Running> _running = new(StringComparer.Ordinal);
   private long _nextSweep;
   private int _runningCount;
+  private int _storageFaulted;
 
   internal TaskService(ContextServer server, TaskServerOptions options)
   {
+    ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(options.PersistenceTimeout, TimeSpan.Zero);
     _server = server;
     _options = options;
     _store = options.Store ?? new MemoryTaskStore();
@@ -132,6 +134,7 @@ internal sealed class TaskService
       return null;
     }
 
+    ThrowIfStorageFaulted();
     if (Volatile.Read(ref _runningCount) >= _options.MaxRunningTasks)
     {
       return CallToolResult.FromError("The server is running as many tasks as it allows. Try again later.");
@@ -220,7 +223,8 @@ internal sealed class TaskService
     }
     catch (Exception ex) when (ex is not OutOfMemoryException)
     {
-      // Storing the outcome failed; there is nobody to tell, and the task stays as it was until it expires.
+      // A durable outcome could not be recorded. Fail closed so polling callers see an error instead of stale work until expiry.
+      Volatile.Write(ref _storageFaulted, 1);
       ContextDiagnostics.Publish(DiagnosticKind.HandlerFault, "A task's outcome could not be stored (" + ex.GetType().Name + ").", TasksExtension.GetMethod, ex);
     }
     finally
@@ -271,6 +275,7 @@ internal sealed class TaskService
 
   private async ValueTask FinishAsync(string taskId, string status, string? message, string? resultJson, string? errorJson)
   {
+    using var timeout = new CancellationTokenSource(_options.PersistenceTimeout, _time);
     await MutateAsync(taskId, record => TaskStates.IsTerminal(record.Status)
       ? null
       : record with
@@ -281,7 +286,15 @@ internal sealed class TaskService
         ErrorJson = errorJson,
         InputRequestsJson = null,
         InputResponsesJson = null,
-      }, CancellationToken.None).ConfigureAwait(false);
+      }, timeout.Token).ConfigureAwait(false);
+  }
+
+  private void ThrowIfStorageFaulted()
+  {
+    if (Volatile.Read(ref _storageFaulted) != 0)
+    {
+      throw new ProtocolException(JsonRpcErrorCodes.InternalError, "Task storage is unavailable. Recreate the server after repairing the store.");
+    }
   }
 
   private async ValueTask SweepAsync(CancellationToken cancellationToken)
@@ -461,6 +474,7 @@ internal sealed class TaskService
       throw new ProtocolException(JsonRpcErrorCodes.InvalidParams, "Failed to retrieve task: Task not found");
     }
 
+    ThrowIfStorageFaulted();
     if (record.ExpiresAt is { } at && at <= _time.GetUtcNow())
     {
       if (_running.TryGetValue(taskId, out var run))

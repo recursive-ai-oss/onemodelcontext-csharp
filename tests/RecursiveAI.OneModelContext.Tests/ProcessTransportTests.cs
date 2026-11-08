@@ -116,7 +116,29 @@ public class ProcessTransportTests
     await channel.DisposeAsync();
 
     Assert.StartsWith("hello|", text, StringComparison.Ordinal);
-    Assert.Equal(Path.GetFullPath(directory).TrimEnd('/'), text["hello|".Length..].TrimEnd('/'));
+    // macOS reports the temporary directory as /var/... while the child's pwd resolves the /var -> /private/var link.
+    Assert.Equal(Resolve(directory), Resolve(text["hello|".Length..]));
+
+    static string Resolve(string path)
+    {
+      var full = Path.GetFullPath(path.TrimEnd('/'));
+      var info = new DirectoryInfo(full);
+      var parts = new Stack<string>();
+      while (info is not null)
+      {
+        var target = info.ResolveLinkTarget(returnFinalTarget: true);
+        if (target is not null)
+        {
+          full = Path.Combine([target.FullName, .. parts]);
+          return full.TrimEnd('/');
+        }
+
+        parts.Push(info.Name);
+        info = info.Parent;
+      }
+
+      return full.TrimEnd('/');
+    }
   }
 
   [Fact]

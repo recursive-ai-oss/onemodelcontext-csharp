@@ -239,14 +239,25 @@ public class MemoryAuthorizationStore : IAuthorizationStore
 public sealed class FileAuthorizationStore : MemoryAuthorizationStore
 {
   private readonly string _path;
+  private readonly int _replacementRetries;
+  private readonly TimeProvider _time;
 
   /// <summary>Opens or creates the store.</summary>
   /// <param name="path">The file. Its directory is created if missing.</param>
+  /// <param name="replacementRetries">Retries on Windows read contention/transient replacement misses and replacement sharing/access failures, 10 ms apart; default 200 (at most 2 seconds of delay). Zero disables retries. Closed temporary files count as recent for half this delay budget (minimum 10 ms); local in-flight writes remain evidence, but reads still respect the budget.</param>
+  /// <param name="timeProvider">Clock for retries; null uses <see cref="TimeProvider.System"/>.</param>
+  /// <param name="cancellationToken">Cancels opening the initial snapshot and its retry delays.</param>
   /// <exception cref="InvalidDataException">The file exists but is not a store written by this class. It is never overwritten in that case.</exception>
-  /// <exception cref="IOException">The file or directory cannot be read or created.</exception>
-  public FileAuthorizationStore(string path)
+  /// <exception cref="IOException">The file or directory cannot be read or created, or contention outlasts the retry budget.</exception>
+  /// <exception cref="OperationCanceledException">Opening the initial snapshot was cancelled.</exception>
+  /// <exception cref="ArgumentOutOfRangeException">The retry count is negative.</exception>
+  public FileAuthorizationStore(string path, int replacementRetries = 200, TimeProvider? timeProvider = null, CancellationToken cancellationToken = default)
   {
     ArgumentException.ThrowIfNullOrEmpty(path);
+    ArgumentOutOfRangeException.ThrowIfNegative(replacementRetries);
+    cancellationToken.ThrowIfCancellationRequested();
+    _replacementRetries = replacementRetries;
+    _time = timeProvider ?? TimeProvider.System;
     _path = Path.GetFullPath(path);
     var directory = Path.GetDirectoryName(_path)!;
     if (!Directory.Exists(directory))
@@ -261,12 +272,15 @@ public sealed class FileAuthorizationStore : MemoryAuthorizationStore
       }
     }
 
-    if (File.Exists(_path))
+    if (OperatingSystem.IsWindows() || File.Exists(_path))
     {
       try
       {
-        using var stream = File.OpenRead(_path);
-        Load(JsonSerializer.Deserialize(stream, AuthorizationStoreJson.Default.StoreState) ?? throw new InvalidDataException("The authorization store file is empty."));
+        using var stream = Storage.AtomicFile.OpenReadAsync(_path, _replacementRetries, _time, cancellationToken, asynchronous: false).AsTask().GetAwaiter().GetResult();
+        if (stream is not null)
+        {
+          Load(JsonSerializer.Deserialize(stream, AuthorizationStoreJson.Default.StoreState) ?? throw new InvalidDataException("The authorization store file is empty."));
+        }
       }
       catch (JsonException ex)
       {
@@ -277,6 +291,7 @@ public sealed class FileAuthorizationStore : MemoryAuthorizationStore
 
   private protected override void Persist(StoreState state)
   {
+    using var writing = Storage.AtomicFile.BeginWrite(_path);
     var temp = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
     var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
     if (!OperatingSystem.IsWindows())
@@ -292,7 +307,8 @@ public sealed class FileAuthorizationStore : MemoryAuthorizationStore
         stream.Flush(flushToDisk: true);
       }
 
-      File.Move(temp, _path, overwrite: true);
+      // Snapshot persistence is synchronous under the store gate; the shared retry wait remains bounded.
+      Storage.AtomicFile.CommitAsync(temp, _path, OperatingSystem.IsWindows() ? _replacementRetries : 0, _time, CancellationToken.None).AsTask().GetAwaiter().GetResult();
     }
     finally
     {

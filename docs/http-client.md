@@ -3,7 +3,9 @@
 `ModelContext.ConnectAsync("https://host/mcp")` (or `ConnectAsync(new Uri(...))`, or `ContextTransport.Http(uri, client, options)`)
 connects over Streamable HTTP. Every message is a POST to the endpoint; the answer is a JSON body or an event stream. The client speaks
 both eras and negotiates like it does over stdio: a `server/discover` probe, then an optimistic modern request with a `-32022` retry,
-then `initialize` for servers that only speak a legacy revision. The era is remembered per origin.
+then `initialize` for servers that only speak a legacy revision. The era is remembered per origin. A timeout or transport failure
+never records a legacy choice; definitive rejections (including HTTP 400/404/405) can. The default `EraCache` expires legacy choices
+after five minutes without renewing them on cache hits, so modern support is probed again.
 
 ## What each era does on the wire
 

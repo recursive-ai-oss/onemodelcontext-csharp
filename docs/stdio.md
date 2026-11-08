@@ -4,6 +4,18 @@ Messages are UTF-8 JSON-RPC, one per line. Standard output carries only protocol
 Both protocol eras share the stream. A legacy `initialize` is an admission barrier: its outcome is visible before later requests or
 notifications on the connection are dispatched. Ordinary requests still run concurrently and replies may arrive out of order.
 
+## Era negotiation
+
+Auto mode probes modern first. `ContextClientOptions.ProbeTimeout` defaults to 5 seconds; newly spawned processes get an additional
+`ProcessStartupAllowance` of 10 seconds on their first probe (15 seconds total), still within the 30-second `ConnectTimeout`.
+Silence or a recoverable transport failure can trigger legacy fallback for that connection, but cannot teach the cache that the server
+is legacy. Only a definitive rejection or an explicit legacy-only version list can do that. Other protocol errors and malformed
+probe responses also remain uncached.
+
+The default in-memory `EraCache` expires a legacy choice five minutes after a definitive probe, even if cached legacy connections keep
+succeeding. This lets a dual-era or upgraded server be probed again. Modern choices remain until forgotten or negotiation fails.
+Construct `EraCache` with a clock and legacy lifetime to change expiration; custom `IEraCache` implementations own their expiration policy.
+
 ## Backpressure
 
 `NewlineChannel` queues at most 1 MiB of output, except that a single larger message is accepted into an empty queue. One additional
