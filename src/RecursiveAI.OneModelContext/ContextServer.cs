@@ -99,7 +99,7 @@ public sealed partial class ContextServer : IServerHost
 {
   private readonly IReadOnlyList<IServerCodec> _codecs;
   private readonly ServerFeatures _features;
-  private readonly Wire.Modern.RequestStateProtector _stateProtector;
+  private Wire.Modern.RequestStateProtector? _stateProtectorInstance;
 
   /// <summary>Creates a server.</summary>
   /// <param name="info">Its name and version, reported to clients.</param>
@@ -111,9 +111,17 @@ public sealed partial class ContextServer : IServerHost
     Options = options ?? new ContextServerOptions();
     _codecs = Options.Codecs ?? DefaultCodecs.Server();
     _features = new ServerFeatures(this);
-    _stateProtector = new Wire.Modern.RequestStateProtector(Options.RequestStateKey, Options.EncryptRequestState, Options.RequestStateLifetime, Options.MaxRequestStateBytes, Options.TimeProvider);
+    // The protector needs platform crypto (random bytes, HKDF), which some platforms lack, so it is built on the first request that
+    // issues or presents requestState. A bad host key still fails here, without touching crypto.
+    Wire.Modern.RequestStateProtector.ValidateHostKey(Options.RequestStateKey);
     HookListChanged();
   }
+
+  private Wire.Modern.RequestStateProtector _stateProtector =>
+    LazyInitializer.EnsureInitialized(ref _stateProtectorInstance, () => new Wire.Modern.RequestStateProtector(Options.RequestStateKey, Options.EncryptRequestState, Options.RequestStateLifetime, Options.MaxRequestStateBytes, Options.TimeProvider));
+
+  /// <summary>Whether the request-state protector has been built; tests use it to check that servers that never use requestState touch no crypto.</summary>
+  internal bool StateProtectorCreated => Volatile.Read(ref _stateProtectorInstance) is not null;
 
   /// <summary>Creates a server.</summary>
   /// <param name="name">Its name.</param>
