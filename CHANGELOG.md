@@ -4,6 +4,12 @@ All notable changes are recorded here, following [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+## [1.0.2]
+
+### Fixed
+
+- Constructing a `ContextServer` no longer uses platform cryptography. The request-state protector is built on the first request that issues or presents `requestState`, so servers that never ask for input run on platforms without a crypto provider (Android NativeAOT).
+
 ## [1.0.1]
 
 ### Added

@@ -70,6 +70,15 @@ internal sealed class RequestStateProtector
   private readonly TimeProvider _time;
   private readonly int _maxBytes;
 
+  /// <summary>Rejects a host key that is too short, without any cryptography.</summary>
+  internal static void ValidateHostKey(byte[]? hostKey)
+  {
+    if (hostKey is not null && hostKey.Length < 32)
+    {
+      throw new ArgumentException("The request state key must be at least 32 bytes.", nameof(hostKey));
+    }
+  }
+
   internal RequestStateProtector(byte[]? hostKey, bool encrypt, TimeSpan lifetime, int maxBytes, TimeProvider time)
   {
     // Without a host key the key lives only in this process: state from another instance or an earlier run is refused.

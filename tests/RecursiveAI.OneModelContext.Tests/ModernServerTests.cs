@@ -533,6 +533,28 @@ public class ModernServerTests
   }
 
   [Fact]
+  public async Task Construction_and_a_plain_tool_call_build_no_request_state_protector()
+  {
+    var server = NewServer();
+    server.Tools.Add(new ToolDefinition("t", "d", ObjectSchema), (_, _) => new ValueTask<CallToolResult>(CallToolResult.FromText("ok")));
+    Assert.False(server.StateProtectorCreated);
+
+    var wire = new ModernWire(server);
+    Assert.True((await wire.SendAsync("tools/list")).TryGetProperty("result", out _));
+    Assert.True((await wire.SendAsync("tools/call", Call("t"))).TryGetProperty("result", out _));
+    Assert.False(server.StateProtectorCreated);
+
+    var (_, _, asking) = await FirstRoundAsync();
+    Assert.True(asking.StateProtectorCreated);
+  }
+
+  [Fact]
+  public void A_short_request_state_key_still_fails_at_construction()
+  {
+    Assert.Throws<ArgumentException>(() => NewServer(new ContextServerOptions { RequestStateKey = new byte[8] }));
+  }
+
+  [Fact]
   public async Task A_request_state_from_another_server_key_is_refused_and_a_shared_key_is_accepted()
   {
     var key = new byte[32];
